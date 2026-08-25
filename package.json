@@ -12,6 +12,10 @@
     "test:all": "node --experimental-vm-modules node_modules/.bin/jest",
     "mcp:dev": "ts-node --esm mcp/aws-discovery/src/index.ts",
     "mcp:start": "node mcp/aws-discovery/dist/index.js",
+    "graph:dev": "ts-node --esm mcp/graph-agent/src/index.ts",
+    "migration:dev": "ts-node --esm mcp/migration-agent/src/index.ts",
+    "api:dev": "ts-node --esm api/main.ts",
+    "api:start": "node dist/api/main.js",
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit"
   },

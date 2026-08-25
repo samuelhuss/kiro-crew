@@ -1,9 +1,198 @@
-# AWS Migration MVP — Infrastructure Discovery
+# AWS Migration MVP — Infrastructure Discovery + Graph
 
-Read-only AWS infrastructure discovery agent for the Kiro Crew platform.
-This is **Phase 1** of an intelligent AWS infrastructure analysis and migration platform.
+Read-only AWS infrastructure discovery and analysis platform for Kiro Crew.
 
-> **Scope**: Discovery and analysis only. No resources are created, modified, or deleted.
+- **Phase 1** — Discovery: scan a region and produce a normalized inventory.
+- **Phase 2** — Infrastructure Graph: turn the inventory into a queryable graph
+  (nodes + relationships) to answer dependency, impact and path questions.
+
+> **Scope**: Discovery and analysis only. No resources are created, modified, or deleted. No migration, CloudFormation, Terraform, or deploy.
+
+## Phase 2 — Infrastructure Graph
+
+```
+AWS → Discovery Agent → AWS Inventory → Graph Builder → Infrastructure Graph
+                                                          ├── Nodes
+                                                          └── Relationships (edges)
+```
+
+The **Graph Builder consumes only the normalized inventory** — it never calls AWS.
+This preserves separation of responsibilities and lets a future Migration Agent
+depend on the Graph Repository instead of AWS APIs.
+
+### Components
+
+| Piece | Location | Responsibility |
+|-------|----------|----------------|
+| `GraphNode` / `GraphEdge` | `domain/graph/node.ts`, `edge.ts` | node + extensible edge vocabulary |
+| `InfrastructureGraphBuilder` | `domain/graph/builder.ts` | `build(inventory) → InfrastructureGraph` |
+| `InfrastructureGraph` + `exportGraph()` | `domain/graph/graph.ts` | value object + `{ nodes, edges }` export for React Flow / Cytoscape / D3 |
+| `InfrastructureGraphRepository` | `repositories/graph/graph.repository.ts` | storage-independent query contract |
+| `InMemoryGraphRepository` | `repositories/graph/in-memory-graph.repository.ts` | MVP impl (adjacency maps, incremental updates) |
+| `infrastructure-graph-agent` | `agents/`, `mcp/graph-agent/` | answers questions using the graph tools |
+
+### Edge vocabulary (extensible, meaning preserved)
+
+`CONTAINS`, `BELONGS_TO`, `DEPENDS_ON`, `USES`, `CONNECTS_TO`, `TARGETS`,
+`RUNS_IN`, `ASSUMES_ROLE`, `READS_FROM`, `WRITES_TO`, `ROUTES_TO`,
+`ASSOCIATED_WITH`, `ATTACHES_TO`, `ROUTES_THROUGH`.
+
+Relationships are **not** collapsed into `DEPENDS_ON`. The builder only emits
+edge types it can determine safely from the inventory.
+
+### What the graph can determine today (from real inventory data)
+
+| Edge | Derived from |
+|------|--------------|
+| Subnet `BELONGS_TO` VPC (+ inverse `CONTAINS`) | network collector / `vpcId` property |
+| ECS Service `BELONGS_TO` Cluster (+ `CONTAINS`) | ecs collector |
+| `RUNS_IN` Subnet (ECS, ALB, RDS, Lambda, NAT) | collectors |
+| `USES` SecurityGroup / IAM Role | ecs, elb, rds, lambda |
+| `TARGETS` TargetGroup (ALB, ECS) | elb, ecs |
+| `ATTACHES_TO` VPC (IGW), `ROUTES_THROUGH` RouteTable | network |
+| RDS Instance `BELONGS_TO` DBCluster | `dbClusterIdentifier` property |
+
+### What the graph deliberately does NOT infer (honest limitations)
+
+These edge types exist in the vocabulary but are **not** created, because the
+current inventory does not expose the data to do so safely. They are reported as
+`UNKNOWN_RELATIONSHIP` issues rather than guessed:
+
+- **`CONNECTS_TO`** app → database (needs task definition env / runtime config).
+- **`READS_FROM` / `WRITES_TO`** S3 / Secrets consumers (needs IAM policy / task def analysis).
+- **`ASSUMES_ROLE`** beyond Lambda's execution role (ECS task role not resolved).
+- **`ROUTES_TO`** route table → IGW/NAT (route destinations not collected).
+
+### Consistency checks (never silent)
+
+The builder records issues for: dangling edges, duplicate nodes/edges, invalid
+relationship types, malformed ARNs, cross-region and cross-account edges, orphan
+nodes, and unexpected cycles in acyclic relationships (`CONTAINS`/`BELONGS_TO`).
+
+### Graph agent tools
+
+| Tool | Purpose |
+|------|---------|
+| `build_graph(region)` | scan (read-only) + build the graph. Run first. |
+| `get_resource(id)` | one node |
+| `get_resources_by_type(type)` | nodes of a type |
+| `get_dependencies(id)` | what a resource depends on |
+| `get_dependents(id)` | what depends on a resource |
+| `get_impact(id)` | transitively affected resources |
+| `find_path(source, target)` | directed relationship path |
+| `get_architecture()` | full `{ nodes, edges }` + service breakdown + limitations |
+
+### End-to-end
+
+```
+scan_region("us-east-1") → inventory → build_graph(inventory) → InfrastructureGraph
+  get_dependencies("ecs-api")
+  get_dependents("rds-prod")
+  get_impact("rds-prod")
+  exportGraph() → { nodes: [...], edges: [...] }
+```
+
+### Incremental updates
+
+The graph is updated in place — a single changed resource does not force a full
+rescan: `addNode`, `updateNode`, `removeNode`, `addEdge`, `removeEdge`,
+`updateRelationships`.
+
+---
+
+## Phase 3 — Migration Analysis
+
+```
+Infrastructure Graph + Source Region + Target Region
+        → Migration Rules (deterministic)
+        → Migration Analysis Agent
+        → Migration Assessment (summary + resources + phases + blockers)
+```
+
+The Migration Analysis stage decides, for a source→target region move, how each
+resource would be treated. It is **analysis only** — no AWS changes, no
+CloudFormation/Terraform/CDK, no snapshots, no replication, no DNS changes.
+
+### Deterministic by design
+
+Critical decisions (strategy, status, risk, blockers, phase order) come from
+**Migration Rules + the Infrastructure Graph**, never from the LLM. The agent
+explains and summarizes; it does not invent strategies.
+
+```
+Infrastructure Graph → Migration Rules → Migration Analyzer → Migration Assessment
+```
+
+| Piece | Location |
+|-------|----------|
+| Strategy / Status / Risk enums | `domain/migration/strategy.ts` |
+| `MigrationRule` catalog (pure fn per type) | `domain/migration/rules.ts` |
+| `MigrationAnalyzer` (dependency-aware) | `domain/migration/analyzer.ts` |
+| `MigrationAssessment` model | `domain/migration/assessment.ts` |
+| Observability events | `domain/migration/events.ts` |
+| `MigrationAssessmentRepository` + in-memory impl | `repositories/migration/` |
+| HTTP API (native `node:http`) | `api/` |
+| `migration-analysis-agent` (MCP, 7 tools) | `agents/`, `mcp/migration-agent/` |
+
+### Strategies & statuses
+
+Strategies: `RECREATE`, `REPLICATE`, `COPY`, `SNAPSHOT_RESTORE`, `TRANSFORM`,
+`MANUAL`, `NOT_SUPPORTED`, `NO_ACTION`.
+Statuses: `SUPPORTED`, `SUPPORTED_WITH_CHANGES`, `REQUIRES_MANUAL_ACTION`,
+`NOT_SUPPORTED`, `UNKNOWN`. Risk: `LOW` | `MEDIUM` | `HIGH` | `CRITICAL`.
+
+Each rule considers resource type, source/target region, dependencies and
+properties. Types with no rule become `UNKNOWN` (never a guess).
+
+### Dependency-aware analysis
+
+The analyzer resolves direct + indirect dependencies from the graph and
+propagates effects: a resource cannot be "cleaner" than a critical dependency
+(e.g. an ECS service that depends on a Secret requiring manual action is itself
+downgraded, and inherits high risk from a dependent RDS). Blockers are only
+recorded when derivable from a rule or the data (e.g. `ECR_IMAGE_NOT_AVAILABLE`,
+`SECRET_VALUE_NOT_REPLICATED`, `DEPENDENCY_NOT_MIGRATABLE`).
+
+### Migration phases
+
+Phases are ordered by a **topological sort of the graph dependencies** (Kahn's
+algorithm), not by a fixed service ranking. Foundation (network/identity) lands
+before the resources that depend on it, and compute lands after data.
+
+### API
+
+```
+POST /migration/analyze                                { sourceRegion, targetRegion }
+GET  /migration/assessments/:id
+GET  /migration/assessments/:id/resources/:resourceId
+```
+
+`POST /migration/analyze` responds with `{ assessmentId, status, summary,
+resources, phases, blockers, warnings, highRiskResources, manualActions }`.
+
+Run it (optionally pre-scanning a region so the graph is ready):
+
+```bash
+npm run build
+SCAN_REGION=us-east-1 PORT=3000 npm run api:start
+```
+
+### Agent tools
+
+`build_graph`, `get_infrastructure_graph`, `get_resource`, `get_dependencies`,
+`get_dependents`, `get_impact`, `get_migration_rule`, `analyze_resource_migration`.
+
+### Observability
+
+Events: `MIGRATION_ANALYSIS_STARTED`, `RESOURCE_ANALYSIS_STARTED`,
+`RESOURCE_ANALYSIS_COMPLETED`, `MIGRATION_BLOCKER_FOUND`,
+`HIGH_RISK_RESOURCE_FOUND`, `MIGRATION_ANALYSIS_COMPLETED`,
+`MIGRATION_ANALYSIS_FAILED` — each with assessmentId / resourceId / resourceType
+/ regions. Never logs secrets or credentials.
+
+---
+
+## Phase 1 — Discovery (below)
 
 ## Architecture
 
