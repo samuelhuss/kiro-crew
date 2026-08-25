@@ -1,0 +1,28 @@
+# Build output
+dist/
+*.js.map
+*.d.ts.map
+
+# Dependencies
+node_modules/
+
+# Kuzu database files
+data/
+*.kuzu/
+
+# Environment
+.env
+.env.*
+
+# Logs
+*.log
+audit.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
