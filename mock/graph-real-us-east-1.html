@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>AWS Infrastructure Graph — us-east-1 (real)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', system-ui, sans-serif; }
+
+    header {
+      padding: 14px 20px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      display: flex; align-items: center; gap: 16px;
+    }
+    header h1 { font-size: 15px; font-weight: 600; color: #e6edf3; }
+    header .badge {
+      background: #1f6feb33; border: 1px solid #1f6feb66;
+      color: #58a6ff; font-size: 11px; padding: 2px 8px; border-radius: 12px;
+    }
+    header .stats { margin-left: auto; font-size: 12px; color: #8b949e; }
+
+    #container { display: flex; height: calc(100vh - 49px); }
+
+    #graph { flex: 1; position: relative; overflow: hidden; }
+    svg { width: 100%; height: 100%; }
+
+    /* Nodes */
+    .node circle {
+      stroke-width: 2;
+      cursor: pointer;
+      transition: filter 0.15s;
+    }
+    .node circle:hover { filter: brightness(1.3); }
+    .node text {
+      font-size: 10px; fill: #c9d1d9;
+      text-shadow: 0 1px 3px #0d1117, 0 0 6px #0d1117;
+      pointer-events: none;
+    }
+
+    /* Edges */
+    .link { stroke-opacity: 0.55; stroke-width: 1.5; marker-end: url(#arrow); }
+    .link:hover { stroke-opacity: 1; stroke-width: 2.5; }
+
+    /* Legend */
+    #legend {
+      position: absolute; bottom: 16px; left: 16px;
+      background: #161b22cc; border: 1px solid #30363d;
+      border-radius: 8px; padding: 10px 14px;
+      font-size: 11px; backdrop-filter: blur(4px);
+    }
+    #legend h3 { font-size: 11px; color: #8b949e; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .leg-item { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+    .leg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .leg-line { width: 22px; height: 2px; flex-shrink: 0; }
+
+    /* Tooltip */
+    #tooltip {
+      position: absolute; pointer-events: none;
+      background: #161b22ee; border: 1px solid #30363d;
+      border-radius: 8px; padding: 10px 13px;
+      font-size: 12px; max-width: 280px;
+      opacity: 0; transition: opacity 0.15s;
+      backdrop-filter: blur(4px);
+    }
+    #tooltip h4 { font-size: 13px; color: #e6edf3; margin-bottom: 4px; }
+    #tooltip .type { font-size: 10px; color: #8b949e; margin-bottom: 6px; }
+    #tooltip .prop { display: flex; gap: 6px; margin: 2px 0; font-size: 11px; }
+    #tooltip .prop-key { color: #8b949e; min-width: 70px; }
+    #tooltip .prop-val { color: #c9d1d9; word-break: break-all; }
+
+    /* Sidebar */
+    #sidebar {
+      width: 280px; background: #161b22; border-left: 1px solid #30363d;
+      overflow-y: auto; padding: 14px;
+    }
+    #sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #8b949e; margin-bottom: 10px; }
+    .group-title {
+      font-size: 11px; font-weight: 600; color: #58a6ff;
+      margin: 10px 0 4px; padding: 2px 0;
+      border-bottom: 1px solid #21262d;
+    }
+    .res-item {
+      font-size: 11px; padding: 4px 6px; border-radius: 4px;
+      cursor: pointer; color: #8b949e;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .res-item:hover { background: #21262d; color: #c9d1d9; }
+    .res-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🔍 AWS Infrastructure Graph</h1>
+  <span class="badge">us-east-1 — real</span>
+  <span class="badge">Account 3785…6611</span>
+  <span class="stats">25 nós · 22 arestas · scan 25 ago 2026</span>
+</header>
+
+<div id="container">
+  <div id="graph">
+    <svg id="svg"></svg>
+    <div id="legend">
+      <h3>Tipo de nó</h3>
+      <div class="leg-item"><div class="leg-dot" style="background:#388bfd"></div> VPC / Rede</div>
+      <div class="leg-item"><div class="leg-dot" style="background:#3fb950"></div> Lambda</div>
+      <div class="leg-item"><div class="leg-dot" style="background:#d29922"></div> S3 Bucket</div>
+      <div class="leg-item"><div class="leg-dot" style="background:#da3633"></div> IAM Role</div>
+      <div class="leg-item"><div class="leg-dot" style="background:#a371f7"></div> ELB / Target Group</div>
+      <div class="leg-item"><div class="leg-dot" style="background:#f78166"></div> EC2 (inferido)</div>
+      <h3 style="margin-top:8px">Relacionamento</h3>
+      <div class="leg-item"><div class="leg-line" style="background:#388bfd"></div> BELONGS_TO / ATTACHES_TO</div>
+      <div class="leg-item"><div class="leg-line" style="background:#3fb950"></div> USES</div>
+      <div class="leg-item"><div class="leg-line" style="background:#d29922"></div> TARGETS</div>
+      <div class="leg-item"><div class="leg-line" style="background:#f78166"></div> UPLOADS_TO (inferido)</div>
+    </div>
+    <div id="tooltip"></div>
+  </div>
+  <div id="sidebar">
+    <h2>Recursos</h2>
+    <div id="res-list"></div>
+  </div>
+</div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+// ── Real data from scan 2026-08-25 ──────────────────────────────────────────
+
+const nodes = [
+  // EC2 / VPC
+  { id: 'vpc-0e6ded7d310cad65d',        name: 'tstsrv-vpc',            type: 'AWS::EC2::VPC',             group: 'EC2' },
+  { id: 'subnet-0c93b4f6791bca46b',     name: 'tstsrv-Public-1',       type: 'AWS::EC2::Subnet',          group: 'EC2' },
+  { id: 'rtb-05daf230a9e705da8',         name: 'tstsrv-Public-rtb',     type: 'AWS::EC2::RouteTable',      group: 'EC2' },
+  { id: 'rtb-0e533050cfe005cce',         name: 'rtb (default)',          type: 'AWS::EC2::RouteTable',      group: 'EC2' },
+  { id: 'igw-0c25b97625bacfc66',         name: 'tstsrv-igw',            type: 'AWS::EC2::InternetGateway', group: 'EC2' },
+  { id: 'sg-0a39c5a932937abb7',          name: 'tstsrv-sg',             type: 'AWS::EC2::SecurityGroup',   group: 'EC2' },
+  { id: 'sg-05dffab468d0983bf',          name: 'default-sg',            type: 'AWS::EC2::SecurityGroup',   group: 'EC2' },
+  { id: 'ec2-tstsrv-inferred',           name: 'tstsrv (EC2 ★)',        type: 'AWS::EC2::Instance',        group: 'EC2-inferred',
+    props: { note: 'Running — não capturado pelo coletor (filtro estado)', role: 'tstsrv_EC2_Default_Role' } },
+
+  // ELB
+  { id: 'tg-k8s-backenda',               name: 'k8s-backenda-backenda', type: 'AWS::ElasticLoadBalancingV2::TargetGroup', group: 'ELB' },
+
+  // Lambda — AutoConvert pipeline
+  { id: 'lambda-preflight',              name: 'AutoConvertPreFlight',  type: 'AWS::Lambda::Function', group: 'Lambda',
+    props: { runtime: 'python3.9', memory: '256 MB', timeout: '5 min', lastModified: '2026-04-01' } },
+  { id: 'lambda-autoconvert',            name: 'AutoConvert',           type: 'AWS::Lambda::Function', group: 'Lambda',
+    props: { runtime: 'python3.9', memory: '256 MB', timeout: '5 min', lastModified: '2026-01-05' } },
+  { id: 'lambda-checkout',               name: 'AutoConvertCheckOut',   type: 'AWS::Lambda::Function', group: 'Lambda',
+    props: { runtime: 'python3.9', memory: '256 MB', timeout: '10 min ⚠️', lastModified: '2026-01-05' } },
+
+  // Lambda — outros
+  { id: 'lambda-notif',                  name: 'NotificacoesPublicCloud', type: 'AWS::Lambda::Function', group: 'Lambda' },
+  { id: 'lambda-algosec',                name: 'AlgosecOnboarding…',    type: 'AWS::Lambda::Function', group: 'Lambda' },
+  { id: 'lambda-kspm-perm',              name: 'KspmPermissionsGrantor', type: 'AWS::Lambda::Function', group: 'Lambda' },
+  { id: 'lambda-kspm-layer',             name: 'KspmAddLayer',          type: 'AWS::Lambda::Function', group: 'Lambda' },
+  { id: 'lambda-prevasio-ecr',           name: 'PrevasioECRExclusions', type: 'AWS::Lambda::Function', group: 'Lambda' },
+  { id: 'lambda-prevasio-push',          name: 'PrevasioImagePush…',    type: 'AWS::Lambda::Function', group: 'Lambda' },
+
+  // S3
+  { id: 's3-inbucket',                   name: 'inbucket',              type: 'AWS::S3::Bucket', group: 'S3', props: { created: '2026-01-05' } },
+  { id: 's3-outbucket',                  name: 'outbucket',             type: 'AWS::S3::Bucket', group: 'S3', props: { created: '2026-01-05' } },
+  { id: 's3-deploy',                     name: 'autoconvert-deploy',    type: 'AWS::S3::Bucket', group: 'S3', props: { created: '2025-08-27' } },
+  { id: 's3-tfstate',                    name: 'claro-terraform-tfstate', type: 'AWS::S3::Bucket', group: 'S3' },
+  { id: 's3-config',                     name: 'config-bucket',         type: 'AWS::S3::Bucket', group: 'S3' },
+
+  // IAM
+  { id: 'iam-lambda-role',               name: 'AutoConvert_Lambda_Role', type: 'AWS::IAM::Role', group: 'IAM',
+    props: { trust: 'Lambda', created: '2026-01-05' } },
+  { id: 'iam-upload-role',               name: 'AutoConvert_Upload_Service_Role', type: 'AWS::IAM::Role', group: 'IAM',
+    props: { trust: 'EC2', created: '2026-01-05' } },
+  { id: 'iam-default-role',              name: 'AutoConvert_Default_Role', type: 'AWS::IAM::Role', group: 'IAM',
+    props: { trust: 'MediaConvert → S3 + API GW', created: '2026-01-05' } },
+  { id: 'iam-notif-role',                name: 'RoleNotificacoesPublicCloud', type: 'AWS::IAM::Role', group: 'IAM' },
+  { id: 'iam-ec2-role',                  name: 'tstsrv_EC2_Default_Role', type: 'AWS::IAM::Role', group: 'IAM' },
+];
+
+const links = [
+  // VPC network topology
+  { source: 'subnet-0c93b4f6791bca46b', target: 'vpc-0e6ded7d310cad65d', rel: 'BELONGS_TO' },
+  { source: 'igw-0c25b97625bacfc66',    target: 'vpc-0e6ded7d310cad65d', rel: 'ATTACHES_TO' },
+  { source: 'rtb-05daf230a9e705da8',    target: 'vpc-0e6ded7d310cad65d', rel: 'BELONGS_TO' },
+  { source: 'sg-0a39c5a932937abb7',     target: 'vpc-0e6ded7d310cad65d', rel: 'BELONGS_TO' },
+
+  // EC2 instance (inferred)
+  { source: 'ec2-tstsrv-inferred',      target: 'subnet-0c93b4f6791bca46b', rel: 'RUNS_IN' },
+  { source: 'ec2-tstsrv-inferred',      target: 'sg-0a39c5a932937abb7',     rel: 'USES' },
+  { source: 'ec2-tstsrv-inferred',      target: 'iam-ec2-role',             rel: 'USES' },
+  { source: 'ec2-tstsrv-inferred',      target: 's3-inbucket',              rel: 'UPLOADS_TO' },
+  { source: 'iam-upload-role',          target: 'ec2-tstsrv-inferred',      rel: 'USED_BY' },
+
+  // AutoConvert pipeline → Lambda Role
+  { source: 'lambda-preflight',         target: 'iam-lambda-role',    rel: 'USES' },
+  { source: 'lambda-autoconvert',       target: 'iam-lambda-role',    rel: 'USES' },
+  { source: 'lambda-checkout',          target: 'iam-lambda-role',    rel: 'USES' },
+
+  // Lambda → S3
+  { source: 'lambda-autoconvert',       target: 's3-inbucket',        rel: 'READS_FROM' },
+  { source: 'lambda-autoconvert',       target: 's3-outbucket',       rel: 'WRITES_TO' },
+  { source: 'lambda-checkout',          target: 's3-outbucket',       rel: 'READS_FROM' },
+  { source: 'lambda-preflight',         target: 's3-inbucket',        rel: 'READS_FROM' },
+
+  // Deploy bucket → Lambdas
+  { source: 's3-deploy',                target: 'lambda-autoconvert', rel: 'DEPLOYS' },
+  { source: 's3-deploy',                target: 'lambda-preflight',   rel: 'DEPLOYS' },
+  { source: 's3-deploy',                target: 'lambda-checkout',    rel: 'DEPLOYS' },
+
+  // MediaConvert role
+  { source: 'iam-default-role',         target: 's3-inbucket',        rel: 'USES' },
+  { source: 'iam-default-role',         target: 's3-outbucket',       rel: 'USES' },
+
+  // NotificacoesPublicCloud
+  { source: 'lambda-notif',             target: 'iam-notif-role',     rel: 'USES' },
+];
+
+// ── Color scheme ──────────────────────────────────────────────────────────────
+
+const COLOR = {
+  EC2:         '#388bfd',
+  'EC2-inferred': '#f78166',
+  ELB:         '#a371f7',
+  Lambda:      '#3fb950',
+  S3:          '#d29922',
+  IAM:         '#da3633',
+};
+
+const LINK_COLOR = {
+  BELONGS_TO:  '#388bfd',
+  ATTACHES_TO: '#388bfd',
+  USES:        '#3fb950',
+  USED_BY:     '#3fb950',
+  TARGETS:     '#d29922',
+  RUNS_IN:     '#a371f7',
+  UPLOADS_TO:  '#f78166',
+  READS_FROM:  '#d29922',
+  WRITES_TO:   '#d29922',
+  DEPLOYS:     '#8b949e',
+};
+
+const NODE_SIZE = {
+  'AWS::EC2::VPC': 18,
+  'AWS::EC2::Subnet': 11,
+  'AWS::EC2::InternetGateway': 10,
+  'AWS::EC2::RouteTable': 9,
+  'AWS::EC2::SecurityGroup': 10,
+  'AWS::EC2::Instance': 16,
+  'AWS::Lambda::Function': 13,
+  'AWS::S3::Bucket': 13,
+  'AWS::IAM::Role': 11,
+  'AWS::ElasticLoadBalancingV2::TargetGroup': 12,
+};
+
+// ── D3 setup ──────────────────────────────────────────────────────────────────
+
+const svg = d3.select('#svg');
+const g   = svg.append('g');
+
+// Arrow markers
+const defs = svg.append('defs');
+Object.entries(LINK_COLOR).forEach(([rel, color]) => {
+  defs.append('marker')
+    .attr('id', `arrow-${rel}`)
+    .attr('viewBox', '0 -4 8 8')
+    .attr('refX', 16).attr('refY', 0)
+    .attr('markerWidth', 6).attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path')
+      .attr('d', 'M0,-4L8,0L0,4')
+      .attr('fill', color).attr('opacity', 0.7);
+});
+
+// Zoom
+svg.call(d3.zoom().scaleExtent([0.2, 4]).on('zoom', e => g.attr('transform', e.transform)));
+
+// Simulation
+const sim = d3.forceSimulation(nodes)
+  .force('link',   d3.forceLink(links).id(d => d.id).distance(d => {
+    // Spread AutoConvert cluster more
+    if (d.rel === 'DEPLOYS') return 90;
+    if (d.rel === 'USES' || d.rel === 'USED_BY') return 80;
+    return 110;
+  }).strength(0.4))
+  .force('charge', d3.forceManyBody().strength(-280))
+  .force('center', d3.forceCenter(
+    document.getElementById('graph').clientWidth  / 2,
+    document.getElementById('graph').clientHeight / 2
+  ))
+  .force('collision', d3.forceCollide(d => (NODE_SIZE[d.type] ?? 10) + 14));
+
+// Links
+const link = g.append('g').selectAll('line')
+  .data(links).join('line')
+  .attr('class', 'link')
+  .attr('stroke', d => LINK_COLOR[d.rel] ?? '#8b949e')
+  .attr('marker-end', d => `url(#arrow-${d.rel})`);
+
+// Nodes
+const node = g.append('g').selectAll('g')
+  .data(nodes).join('g')
+  .attr('class', 'node')
+  .call(d3.drag()
+    .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+    .on('drag',  (e, d) => { d.fx = e.x; d.fy = e.y; })
+    .on('end',   (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; })
+  );
+
+node.append('circle')
+  .attr('r', d => NODE_SIZE[d.type] ?? 10)
+  .attr('fill', d => COLOR[d.group] ?? '#8b949e')
+  .attr('stroke', d => d.group === 'EC2-inferred' ? '#f7816699' : '#0d111799')
+  .attr('stroke-dasharray', d => d.group === 'EC2-inferred' ? '4,3' : null);
+
+node.append('text')
+  .attr('dy', d => (NODE_SIZE[d.type] ?? 10) + 11)
+  .attr('text-anchor', 'middle')
+  .text(d => d.name.length > 20 ? d.name.slice(0, 18) + '…' : d.name);
+
+// Tick
+sim.on('tick', () => {
+  link
+    .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+    .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+  node.attr('transform', d => `translate(${d.x},${d.y})`);
+});
+
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+
+const tip = document.getElementById('tooltip');
+
+node.on('mouseover', (event, d) => {
+  const svc = d.type.split('::').slice(1).join(' / ');
+  let html = `<h4>${d.name}</h4><div class="type">${svc}</div>`;
+  if (d.props) {
+    for (const [k, v] of Object.entries(d.props)) {
+      html += `<div class="prop"><span class="prop-key">${k}</span><span class="prop-val">${v}</span></div>`;
+    }
+  }
+  tip.innerHTML = html;
+  tip.style.opacity = 1;
+})
+.on('mousemove', event => {
+  const { clientX: x, clientY: y } = event;
+  const rect = document.getElementById('graph').getBoundingClientRect();
+  tip.style.left  = Math.min(x - rect.left + 14, rect.width  - 295) + 'px';
+  tip.style.top   = Math.min(y - rect.top  + 14, rect.height - 160) + 'px';
+})
+.on('mouseout', () => { tip.style.opacity = 0; });
+
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+
+const groups = {};
+for (const n of nodes) {
+  const g = n.group.replace('-inferred', ' (inferido)');
+  if (!groups[g]) groups[g] = [];
+  groups[g].push(n);
+}
+
+const list = document.getElementById('res-list');
+for (const [grp, items] of Object.entries(groups)) {
+  const title = document.createElement('div');
+  title.className = 'group-title';
+  title.textContent = `${grp} (${items.length})`;
+  list.appendChild(title);
+
+  for (const item of items) {
+    const el = document.createElement('div');
+    el.className = 'res-item';
+    el.innerHTML = `<div class="res-dot" style="background:${COLOR[item.group] ?? '#8b949e'}"></div>${item.name}`;
+    el.onclick = () => {
+      sim.alphaTarget(0.2).restart();
+      item.fx = item.x; item.fy = item.y;
+      svg.transition().duration(600)
+        .call(d3.zoom().transform, d3.zoomIdentity.translate(
+          document.getElementById('graph').clientWidth  / 2 - item.x,
+          document.getElementById('graph').clientHeight / 2 - item.y
+        ).scale(1.4));
+      setTimeout(() => { item.fx = null; item.fy = null; sim.alphaTarget(0); }, 800);
+    };
+    list.appendChild(el);
+  }
+}
+</script>
+</body>
+</html>

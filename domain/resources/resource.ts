@@ -10,6 +10,8 @@ export type ResourceType =
   | 'AWS::EC2::NatGateway'
   | 'AWS::EC2::SecurityGroup'
   | 'AWS::EC2::Instance'
+  | 'AWS::EC2::Volume'
+  | 'AWS::EC2::EIP'
   | 'AWS::ECS::Cluster'
   | 'AWS::ECS::Service'
   | 'AWS::ElasticLoadBalancingV2::LoadBalancer'
@@ -19,7 +21,15 @@ export type ResourceType =
   | 'AWS::S3::Bucket'
   | 'AWS::Lambda::Function'
   | 'AWS::IAM::Role'
-  | 'AWS::SecretsManager::Secret';
+  | 'AWS::SecretsManager::Secret'
+  | 'AWS::Logs::LogGroup'
+  | 'AWS::Route53::HostedZone'
+  | 'AWS::DynamoDB::Table'
+  | 'AWS::ECR::Repository'
+  | 'AWS::SQS::Queue'
+  | 'AWS::SNS::Topic'
+  | 'AWS::ElastiCache::CacheCluster'
+  | 'AWS::CloudFront::Distribution';
 
 export interface AwsResource {
   /** Provider-native unique identifier (e.g. VPC ID, ARN, bucket name) */

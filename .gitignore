@@ -6,9 +6,12 @@ dist/
 # Dependencies
 node_modules/
 
-# Kuzu database files
-data/
+# Kuzu database files (legacy, no longer used)
 *.kuzu/
+
+# Generated data (inventory scans, graph state — contains account IDs)
+data/inventory/
+data/graph/
 
 # Environment
 .env

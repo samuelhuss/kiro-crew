@@ -5,10 +5,11 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { scanRegion } from '../../../infrastructure/aws/scanner.js';
 import { buildGraph } from '../../../domain/graph/builder.js';
-import { InMemoryGraphRepository } from '../../../repositories/graph/in-memory-graph.repository.js';
+import { createGraphRepository } from '../../../repositories/graph/graph-repository.factory.js';
 import type { InfrastructureGraphRepository } from '../../../repositories/graph/graph.repository.js';
+import { createInventoryRepository } from '../../../repositories/inventory-repository.factory.js';
+import type { InfrastructureRepository } from '../../../repositories/infrastructure.repository.js';
 import { logger } from '../../../infrastructure/aws/logger.js';
 import type { GraphNode } from '../../../domain/graph/node.js';
 
@@ -23,21 +24,26 @@ function groupNodesByService(nodes: GraphNode[]): Array<{ service: string; count
 }
 
 /**
- * infrastructure-graph-agent MCP server.
+ * infrastructure-graph-agent MCP server — stage 2 of the pipeline.
  *
- * Consumes the normalized inventory produced by the Discovery layer, builds an
- * InfrastructureGraph, stores it in a storage-independent repository, and exposes
- * graph queries as tools. It NEVER calls AWS write APIs and performs NO migration.
+ * SINGLE RESPONSIBILITY: read the INVENTORY that the discovery agent persisted,
+ * build the InfrastructureGraph from it, store the graph, and expose graph
+ * queries. It NEVER scans AWS — that is the discovery agent's job. If no
+ * inventory exists for the region, it tells the caller to run discovery first.
  *
- * build_graph runs scan_region internally (read-only) and then builds the graph,
- * satisfying:  scan_region → inventory → build_graph → InfrastructureGraph.
+ * Pipeline:  discovery.scan_region → Inventory → graph.build_graph → Graph
  */
-const repo: InfrastructureGraphRepository = new InMemoryGraphRepository();
+const repo: InfrastructureGraphRepository = createGraphRepository();
+
+/** Inventory store — SHARED with the discovery agent (read-only here). */
+const inventoryDir =
+  process.env['INVENTORY_DIR'] ?? process.env['KUZU_INVENTORY_DIR'] ?? process.env['KUZU_DATA_DIR'];
+const inventoryRepo: InfrastructureRepository = createInventoryRepository();
 
 // ── Input schemas ─────────────────────────────────────────────────────────────
 
 const BuildGraphInput = z.object({
-  region: z.string().min(1).describe('AWS region to scan and graph, e.g. us-east-1'),
+  region: z.string().min(1).describe('AWS region whose inventory to build the graph from, e.g. us-east-1'),
 });
 const NodeIdInput = z.object({ id: z.string().min(1).describe('Resource id or ARN') });
 const TypeInput = z.object({ type: z.string().min(1).describe('Resource type, e.g. AWS::ECS::Service') });
@@ -63,7 +69,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'build_graph',
       description:
-        'Scan a region (READ-ONLY) and build the infrastructure graph from the inventory. Run this first. Returns a summary of nodes, edges and consistency issues.',
+        'Build the infrastructure graph FROM the inventory the discovery agent persisted for a region — does NOT scan AWS. Requires that discovery.scan_region(region) ran first. Returns a summary of nodes, edges and consistency issues.',
       inputSchema: {
         type: 'object',
         properties: { region: { type: 'string', description: 'AWS region, e.g. us-east-1' } },
@@ -141,13 +147,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     switch (name) {
       case 'build_graph': {
         const { region } = BuildGraphInput.parse(args);
-        const inventory = await scanRegion(region);
+        // Read the inventory the discovery agent persisted — NO AWS scan here.
+        const inventory = await inventoryRepo.getInventory(region);
+        if (!inventory) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: `No inventory found for region "${region}". Run the discovery agent's scan_region("${region}") first — the graph agent builds the graph FROM the inventory and never scans AWS itself.`,
+            }],
+            isError: true,
+          };
+        }
         const graph = buildGraph(inventory);
         await repo.saveGraph(graph);
         return text({
           region: inventory.region,
           accountId: inventory.accountId,
           scannedAt: inventory.scannedAt,
+          source: 'inventory (no re-scan)',
           metadata: graph.metadata,
           issues: graph.issues,
         });
@@ -223,13 +240,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 async function main(): Promise<void> {
   if (repo.init) await repo.init();
+  if (inventoryRepo.init) await inventoryRepo.init();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  logger.info('infrastructure-graph-agent started', { transport: 'stdio', repository: 'in-memory' });
+  logger.info('infrastructure-graph-agent started', {
+    transport: 'stdio',
+    graphStore: (process.env['GRAPH_DIR'] ?? process.env['KUZU_GRAPH_DIR'] ?? process.env['KUZU_DATA_DIR']) ? 'file(shared)' : 'in-memory',
+    inventoryStore: inventoryDir ? 'file(shared)' : 'in-memory',
+  });
 
   const shutdown = async (): Promise<void> => {
     logger.info('infrastructure-graph-agent shutting down');
     if (repo.close) await repo.close();
+    if (inventoryRepo.close) await inventoryRepo.close();
     process.exit(0);
   };
   process.on('SIGTERM', () => void shutdown());

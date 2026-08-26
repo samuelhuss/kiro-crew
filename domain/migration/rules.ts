@@ -274,26 +274,35 @@ const RULES: Partial<Record<ResourceType, MigrationRule['evaluate']>> = {
         },
       ],
     }),
-};
 
-/**
- * Rules for resource types that are NOT yet in the Infrastructure Graph (the
- * Discovery layer does not collect them yet), but for which we already know the
- * correct treatment. Kept here so the rule engine is correct when discovery
- * evolves. They are looked up by the CloudFormation type STRING.
- */
-const FORWARD_LOOKING_RULES: Record<string, MigrationRule['evaluate']> = {
-  'AWS::KMS::Key': () =>
+  'AWS::EC2::Volume': () =>
     result({
-      strategy: 'RECREATE',
-      status: 'REQUIRES_MANUAL_ACTION',
-      baseRisk: 'CRITICAL',
+      strategy: 'SNAPSHOT_RESTORE',
+      status: 'SUPPORTED_WITH_CHANGES',
+      baseRisk: 'MEDIUM',
       reasoning:
-        'KMS keys are region-specific and their key material cannot be moved. A new key must be created in the target region and data re-encrypted.',
-      riskReasons: ['Key material is region-bound', 'Re-encryption of dependent data required'],
-      manualActions: ['Create a new KMS key in the target region and re-encrypt dependent resources.'],
+        'EBS volumes are region-bound; migrate by creating a snapshot, copying to the target region, and restoring. Data integrity depends on consistent snapshot state.',
+      riskReasons: ['Persistent data', 'Cross-region snapshot copy required'],
+      warnings: ['Volume must be detached or in consistent state for a clean snapshot.'],
       blockers: [
-        { blocker: 'KMS_KEY_UNAVAILABLE', severity: 'CRITICAL', description: 'KMS key material cannot cross regions.' },
+        {
+          blocker: 'CROSS_REGION_DATA_TRANSFER_REQUIRED',
+          severity: 'MEDIUM',
+          description: 'EBS snapshot must be copied to the target region before restore.',
+        },
+      ],
+    }),
+
+  'AWS::EC2::EIP': (ctx) =>
+    result({
+      strategy: 'MANUAL',
+      status: 'REQUIRES_MANUAL_ACTION',
+      baseRisk: 'MEDIUM',
+      reasoning: 'Elastic IPs are region-specific and cannot be moved; a new address must be allocated in the target region.',
+      riskReasons: ['Public IP address changes'],
+      manualActions: [`Allocate a new Elastic IP in ${ctx.targetRegion} and update references.`],
+      blockers: [
+        { blocker: 'REGIONAL_DEPENDENCY', severity: 'MEDIUM', description: 'Elastic IP cannot be moved across regions.' },
       ],
     }),
 
@@ -322,16 +331,95 @@ const FORWARD_LOOKING_RULES: Record<string, MigrationRule['evaluate']> = {
       ],
     }),
 
-  'AWS::EC2::EIP': (ctx) =>
+  'AWS::DynamoDB::Table': () =>
     result({
-      strategy: 'MANUAL',
-      status: 'REQUIRES_MANUAL_ACTION',
-      baseRisk: 'MEDIUM',
-      reasoning: 'Elastic IPs are region-specific and cannot be moved; a new address must be allocated in the target region.',
-      riskReasons: ['Public IP address changes'],
-      manualActions: [`Allocate a new Elastic IP in ${ctx.targetRegion} and update references.`],
+      strategy: 'REPLICATE',
+      status: 'SUPPORTED_WITH_CHANGES',
+      baseRisk: 'HIGH',
+      reasoning:
+        'DynamoDB tables hold persistent data. Migrate via Global Tables (ongoing replication) or on-demand backup + restore in the target region.',
+      riskReasons: ['Persistent data', 'Cross-region data transfer', 'GSI/LSI must be recreated'],
       blockers: [
-        { blocker: 'REGIONAL_DEPENDENCY', severity: 'MEDIUM', description: 'Elastic IP cannot be moved across regions.' },
+        {
+          blocker: 'CROSS_REGION_DATA_TRANSFER_REQUIRED',
+          severity: 'HIGH',
+          description: 'Table data must be replicated or restored in the target region.',
+        },
+      ],
+    }),
+
+  'AWS::ECR::Repository': (ctx) =>
+    result({
+      strategy: 'REPLICATE',
+      status: 'SUPPORTED_WITH_CHANGES',
+      baseRisk: 'MEDIUM',
+      reasoning:
+        'ECR repositories are region-bound. Container images must be replicated to the target region (cross-region replication or manual push).',
+      riskReasons: ['Images must exist in target region before ECS services start'],
+      manualActions: [`Replicate container images to ECR in ${ctx.targetRegion}.`],
+    }),
+
+  'AWS::SQS::Queue': () =>
+    result({
+      strategy: 'RECREATE',
+      status: 'SUPPORTED_WITH_CHANGES',
+      baseRisk: 'MEDIUM',
+      reasoning:
+        'SQS queues are region-bound configuration. Recreate in target region; in-flight messages are NOT migrated.',
+      riskReasons: ['In-flight messages lost on cutover', 'Producers/consumers must be reconfigured'],
+      warnings: ['Messages currently in the source queue will not be migrated.'],
+    }),
+
+  'AWS::SNS::Topic': () =>
+    result({
+      strategy: 'RECREATE',
+      status: 'SUPPORTED_WITH_CHANGES',
+      baseRisk: 'LOW',
+      reasoning: 'SNS topics are recreated in the target region. Subscriptions must be re-established.',
+      warnings: ['All subscriptions (Lambda, SQS, email, HTTP) must be recreated in the target region.'],
+    }),
+
+  'AWS::ElastiCache::CacheCluster': () =>
+    result({
+      strategy: 'SNAPSHOT_RESTORE',
+      status: 'SUPPORTED_WITH_CHANGES',
+      baseRisk: 'MEDIUM',
+      reasoning:
+        'ElastiCache clusters can be migrated via snapshot (Redis) or recreated empty (Memcached). Redis snapshot can be copied cross-region.',
+      riskReasons: ['Data loss if Memcached (no persistence)', 'Endpoint changes'],
+      warnings: ['Memcached clusters cannot be snapshotted — only Redis supports cross-region snapshot copy.'],
+    }),
+
+  'AWS::CloudFront::Distribution': () =>
+    result({
+      strategy: 'NO_ACTION',
+      status: 'SUPPORTED_WITH_CHANGES',
+      baseRisk: 'LOW',
+      reasoning:
+        'CloudFront is a global service. Distributions remain as-is, but origin configurations must be updated to point to the target-region resources (S3, ALB).',
+      warnings: ['Origins must be repointed to target-region endpoints after migration.'],
+      manualActions: ['Update distribution origins to reference the new target-region resources.'],
+    }),
+};
+
+/**
+ * Rules for resource types that are NOT yet in the Infrastructure Graph (the
+ * Discovery layer does not collect them yet), but for which we already know the
+ * correct treatment. Kept here so the rule engine is correct when discovery
+ * evolves. They are looked up by the CloudFormation type STRING.
+ */
+const FORWARD_LOOKING_RULES: Record<string, MigrationRule['evaluate']> = {
+  'AWS::KMS::Key': () =>
+    result({
+      strategy: 'RECREATE',
+      status: 'REQUIRES_MANUAL_ACTION',
+      baseRisk: 'CRITICAL',
+      reasoning:
+        'KMS keys are region-specific and their key material cannot be moved. A new key must be created in the target region and data re-encrypted.',
+      riskReasons: ['Key material is region-bound', 'Re-encryption of dependent data required'],
+      manualActions: ['Create a new KMS key in the target region and re-encrypt dependent resources.'],
+      blockers: [
+        { blocker: 'KMS_KEY_UNAVAILABLE', severity: 'CRITICAL', description: 'KMS key material cannot cross regions.' },
       ],
     }),
 };

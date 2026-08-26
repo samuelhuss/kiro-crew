@@ -16,6 +16,17 @@ import { collectS3Resources } from './collectors/s3.collector.js';
 import { collectLambdaResources } from './collectors/lambda.collector.js';
 import { collectIamResources } from './collectors/iam.collector.js';
 import { collectSecretsResources } from './collectors/secrets.collector.js';
+import { collectEc2Instances } from './collectors/ec2.collector.js';
+import { collectEbsVolumes } from './collectors/ebs.collector.js';
+import { collectElasticIps } from './collectors/eip.collector.js';
+import { collectLogGroups } from './collectors/cloudwatch.collector.js';
+import { collectHostedZones } from './collectors/route53.collector.js';
+import { collectDynamoDbTables } from './collectors/dynamodb.collector.js';
+import { collectEcrRepositories } from './collectors/ecr.collector.js';
+import { collectSqsQueues } from './collectors/sqs.collector.js';
+import { collectSnsTopics } from './collectors/sns.collector.js';
+import { collectElastiCacheClusters } from './collectors/elasticache.collector.js';
+import { collectCloudFrontDistributions } from './collectors/cloudfront.collector.js';
 
 export interface ScanResult {
   resources: AwsResource[];
@@ -49,6 +60,9 @@ export async function scanRegion(region: string): Promise<RegionInventory> {
   // Run collectors concurrently — each returns a fault-isolated ScanResult
   const results = await Promise.allSettled([
     collectNetworkResources(clients.ec2, region, accountId),
+    collectEc2Instances(clients.ec2, region, accountId),
+    collectEbsVolumes(clients.ec2, region, accountId),
+    collectElasticIps(clients.ec2, region, accountId),
     collectEcsResources(clients.ecs, region, accountId),
     collectElbResources(clients.elbv2, region, accountId),
     collectRdsResources(clients.rds, region, accountId),
@@ -56,6 +70,14 @@ export async function scanRegion(region: string): Promise<RegionInventory> {
     collectLambdaResources(clients.lambda, region, accountId),
     collectIamResources(clients.iam, region, accountId),
     collectSecretsResources(clients.secretsManager, region, accountId),
+    collectLogGroups(clients.cloudwatchLogs, region, accountId),
+    collectHostedZones(clients.route53, region, accountId),
+    collectDynamoDbTables(clients.dynamodb, region, accountId),
+    collectEcrRepositories(clients.ecr, region, accountId),
+    collectSqsQueues(clients.sqs, region, accountId),
+    collectSnsTopics(clients.sns, region, accountId),
+    collectElastiCacheClusters(clients.elasticache, region, accountId),
+    collectCloudFrontDistributions(clients.cloudfront, region, accountId),
   ]);
 
   const allResources: AwsResource[] = [];

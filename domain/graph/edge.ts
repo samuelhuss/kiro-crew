@@ -28,6 +28,8 @@ export type EdgeType =
   | 'ATTACHES_TO' // InternetGateway ATTACHES_TO VPC
   // ── Identity / access ────────────────────────────────────────────────────
   | 'ASSUMES_ROLE' // resource ASSUMES_ROLE IAM Role (partial: only Lambda today)
+  | 'ATTACHED_TO' // EBS volume ATTACHED_TO EC2 instance
+  | 'LOGS_FOR' // CloudWatch log group LOGS_FOR Lambda function
   | 'READS_FROM' // consumer READS_FROM S3/Secret (NOT derivable from current data)
   | 'WRITES_TO'; // consumer WRITES_TO S3 (NOT derivable from current data)
 
@@ -45,6 +47,8 @@ export const EDGE_TYPES: readonly EdgeType[] = [
   'ROUTES_THROUGH',
   'ATTACHES_TO',
   'ASSUMES_ROLE',
+  'ATTACHED_TO',
+  'LOGS_FOR',
   'READS_FROM',
   'WRITES_TO',
 ] as const;

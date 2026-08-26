@@ -7,9 +7,9 @@
   "scripts": {
     "build": "tsc --build",
     "build:watch": "tsc --build --watch",
-    "test": "node --experimental-vm-modules node_modules/.bin/jest --testPathPattern=tests/unit",
-    "test:integration": "node --experimental-vm-modules node_modules/.bin/jest --testPathPattern=tests/integration",
-    "test:all": "node --experimental-vm-modules node_modules/.bin/jest",
+    "test": "node --experimental-vm-modules --max-old-space-size=2048 node_modules/.bin/jest --runInBand --workerIdleMemoryLimit=512MB --testPathPattern=\"tests/unit\" --testPathIgnorePatterns=\"kuzu\" && node --experimental-vm-modules --max-old-space-size=2048 node_modules/.bin/jest --runInBand --workerIdleMemoryLimit=512MB --forceExit --testPathPattern=\"tests/unit/kuzu-repository\\.test\" && node --experimental-vm-modules --max-old-space-size=2048 node_modules/.bin/jest --runInBand --workerIdleMemoryLimit=512MB --forceExit --testPathPattern=\"tests/unit/kuzu-graph-repository\\.test\"",
+    "test:integration": "node --experimental-vm-modules --max-old-space-size=2048 node_modules/.bin/jest --runInBand --workerIdleMemoryLimit=512MB --testPathPattern=tests/integration",
+    "test:all": "node --experimental-vm-modules --max-old-space-size=2048 node_modules/.bin/jest --runInBand --workerIdleMemoryLimit=512MB",
     "mcp:dev": "ts-node --esm mcp/aws-discovery/src/index.ts",
     "mcp:start": "node mcp/aws-discovery/dist/index.js",
     "graph:dev": "ts-node --esm mcp/graph-agent/src/index.ts",
@@ -17,17 +17,27 @@
     "api:dev": "ts-node --esm api/main.ts",
     "api:start": "node dist/api/main.js",
     "lint": "eslint . --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:kuzu": "node --experimental-vm-modules --max-old-space-size=2048 node_modules/.bin/jest --runInBand --workerIdleMemoryLimit=512MB --forceExit --testPathPattern=\"tests/unit/kuzu-repository\\.test\" && node --experimental-vm-modules --max-old-space-size=2048 node_modules/.bin/jest --runInBand --workerIdleMemoryLimit=512MB --forceExit --testPathPattern=\"tests/unit/kuzu-graph-repository\\.test\"",
+    "test:unit-core": "node --experimental-vm-modules --max-old-space-size=2048 node_modules/.bin/jest --runInBand --workerIdleMemoryLimit=512MB --testPathPattern=\"tests/unit\" --testPathIgnorePatterns=\"kuzu\""
   },
   "dependencies": {
+    "@aws-sdk/client-cloudfront": "^3.654.0",
+    "@aws-sdk/client-cloudwatch-logs": "^3.654.0",
+    "@aws-sdk/client-dynamodb": "^3.654.0",
     "@aws-sdk/client-ec2": "3.830.0",
+    "@aws-sdk/client-ecr": "^3.654.0",
     "@aws-sdk/client-ecs": "3.830.0",
     "@aws-sdk/client-elastic-load-balancing-v2": "3.830.0",
+    "@aws-sdk/client-elasticache": "^3.654.0",
     "@aws-sdk/client-iam": "3.830.0",
     "@aws-sdk/client-lambda": "3.830.0",
     "@aws-sdk/client-rds": "3.830.0",
+    "@aws-sdk/client-route-53": "^3.654.0",
     "@aws-sdk/client-s3": "3.830.0",
     "@aws-sdk/client-secrets-manager": "3.830.0",
+    "@aws-sdk/client-sns": "^3.654.0",
+    "@aws-sdk/client-sqs": "^3.654.0",
     "@aws-sdk/client-sts": "3.830.0",
     "@modelcontextprotocol/sdk": "1.12.3",
     "kuzu": "0.11.3",
@@ -68,6 +78,7 @@
       "repositories/**/*.ts",
       "mcp/**/*.ts",
       "!**/*.d.ts"
-    ]
+    ],
+    "maxWorkers": 1
   }
 }

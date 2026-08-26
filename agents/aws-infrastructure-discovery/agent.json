@@ -20,7 +20,12 @@
         "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/dist/mcp/aws-discovery/src/index.js"
       ],
       "env": {
-        "LOG_LEVEL": "info"
+        "LOG_LEVEL": "info",
+        "INVENTORY_DIR": "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/data/inventory",
+        "AWS_REGION": "us-east-1",
+        "AWS_ACCESS_KEY_ID": "",
+        "AWS_SECRET_ACCESS_KEY": "",
+        "AWS_SESSION_TOKEN": ""
       }
     }
   },

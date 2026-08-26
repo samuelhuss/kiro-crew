@@ -6,21 +6,26 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { scanRegion, getResourceById, getResourceDependencies } from '../../../infrastructure/aws/scanner.js';
-import { InMemoryInfrastructureRepository } from '../../../repositories/infrastructure.repository.js';
-import { KuzuInfrastructureRepository } from '../../../repositories/kuzu.repository.js';
+import { createInventoryRepository } from '../../../repositories/inventory-repository.factory.js';
 import type { InfrastructureRepository } from '../../../repositories/infrastructure.repository.js';
 import { groupByService } from '../../../domain/resources/inventory.js';
 import { logger } from '../../../infrastructure/aws/logger.js';
 import type { AwsResource } from '../../../domain/resources/resource.js';
 
 /**
- * Repository selection:
- *   KUZU_DATA_DIR  — set to a path → uses KuzuInfrastructureRepository (file-backed graph DB)
- *   unset          → uses InMemoryInfrastructureRepository (no persistence, good for CI/tests)
+ * DISCOVERY — stage 1 of the pipeline. SINGLE RESPONSIBILITY: scan AWS
+ * (read-only) and persist the raw INVENTORY. It does NOT build the graph and
+ * does NOT analyze migration — those are the graph and migration agents' jobs.
+ *
+ * Inventory store:
+ *   INVENTORY_DIR (or legacy KUZU_INVENTORY_DIR / KUZU_DATA_DIR) → JSON file,
+ *     shared with the graph agent, which reads the inventory to build the graph
+ *     (no re-scan). A plain file: many readers, atomic single-writer, no lock.
+ *   unset → in-memory (ephemeral; good for CI / tests).
  */
-const repo: InfrastructureRepository = process.env['KUZU_DATA_DIR']
-  ? new KuzuInfrastructureRepository(process.env['KUZU_DATA_DIR'])
-  : new InMemoryInfrastructureRepository();
+const inventoryDir =
+  process.env['INVENTORY_DIR'] ?? process.env['KUZU_INVENTORY_DIR'] ?? process.env['KUZU_DATA_DIR'];
+const repo: InfrastructureRepository = createInventoryRepository();
 
 // ── Input schemas ─────────────────────────────────────────────────────────────
 
@@ -268,8 +273,10 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  const repoKind = process.env['KUZU_DATA_DIR'] ? `kuzu:${process.env['KUZU_DATA_DIR']}` : 'in-memory';
-  logger.info('aws-discovery-mcp started', { transport: 'stdio', repository: repoKind });
+  logger.info('aws-discovery-mcp started', {
+    transport: 'stdio',
+    inventoryStore: inventoryDir ? `file:${inventoryDir}` : 'in-memory',
+  });
 
   // Graceful shutdown
   const shutdown = async (): Promise<void> => {

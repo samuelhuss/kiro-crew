@@ -5,10 +5,8 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { scanRegion } from '../../../infrastructure/aws/scanner.js';
-import { buildGraph } from '../../../domain/graph/builder.js';
 import { exportGraph } from '../../../domain/graph/graph.js';
-import { InMemoryGraphRepository } from '../../../repositories/graph/in-memory-graph.repository.js';
+import { createGraphRepository } from '../../../repositories/graph/graph-repository.factory.js';
 import { InMemoryAssessmentRepository } from '../../../repositories/migration/in-memory-assessment.repository.js';
 import { MigrationAnalysisService } from '../../../domain/migration/service.js';
 import { evaluateRule } from '../../../domain/migration/rules.js';
@@ -25,7 +23,7 @@ import { logger } from '../../../infrastructure/aws/logger.js';
  * READ-ONLY: never creates/changes/deletes AWS resources; no CloudFormation,
  * Terraform, snapshots, replication, or DNS changes.
  */
-const graphRepo = new InMemoryGraphRepository();
+const graphRepo = createGraphRepository();
 const assessmentRepo = new InMemoryAssessmentRepository();
 const service = new MigrationAnalysisService(graphRepo, assessmentRepo);
 
@@ -34,7 +32,6 @@ const notFound = (id: string) => ({
   content: [{ type: 'text' as const, text: `Resource "${id}" not found. Run build_graph first, or check the id.` }],
 });
 
-const RegionInput = z.object({ region: z.string().min(1) });
 const AnalyzeInput = z.object({ sourceRegion: z.string().min(1), targetRegion: z.string().min(1) });
 const IdInput = z.object({ id: z.string().min(1) });
 const RuleInput = z.object({
@@ -50,11 +47,6 @@ const server = new Server(
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
-    {
-      name: 'build_graph',
-      description: 'Scan a region (READ-ONLY) and build the infrastructure graph. Run this before analysis if no graph is loaded.',
-      inputSchema: { type: 'object', properties: { region: { type: 'string' } }, required: ['region'] },
-    },
     {
       name: 'get_infrastructure_graph',
       description: 'Return the graph metadata + a serialized { nodes, edges } view. Prefer the scoped tools for large graphs.',
@@ -112,14 +104,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   try {
     switch (name) {
-      case 'build_graph': {
-        const { region } = RegionInput.parse(args);
-        const inventory = await scanRegion(region);
-        const graph = buildGraph(inventory);
-        await graphRepo.saveGraph(graph);
-        return text({ region: inventory.region, accountId: inventory.accountId, metadata: graph.metadata, issues: graph.issues });
-      }
-
       case 'get_infrastructure_graph': {
         const graph = await graphRepo.getGraph();
         return text({ metadata: graph.metadata, graph: exportGraph(graph) });
@@ -173,6 +157,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'analyze_resource_migration': {
         const { sourceRegion, targetRegion } = AnalyzeInput.parse(args);
+        // Pipeline guard: the graph must already exist (built by the graph agent).
+        const graph = await graphRepo.getGraph();
+        if (graph.nodes.length === 0) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: `No graph loaded. This agent only ANALYZES an existing graph. Run the pipeline first: discovery.scan_region("${sourceRegion}") → graph.build_graph("${sourceRegion}"), then retry.`,
+            }],
+            isError: true,
+          };
+        }
         const assessment = await service.analyze(sourceRegion, targetRegion);
         return text(assessment);
       }
@@ -188,16 +183,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 async function main(): Promise<void> {
+  if (graphRepo.init) await graphRepo.init();
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  logger.info('migration-analysis-agent started', { transport: 'stdio' });
+  const repoKind = (process.env['GRAPH_DIR'] ?? process.env['KUZU_GRAPH_DIR'] ?? process.env['KUZU_DATA_DIR']) ? 'file(shared)' : 'in-memory';
+  logger.info('migration-analysis-agent started', { transport: 'stdio', graphRepository: repoKind });
 
-  const shutdown = (): void => {
+  const shutdown = async (): Promise<void> => {
     logger.info('migration-analysis-agent shutting down');
+    if (graphRepo.close) await graphRepo.close();
     process.exit(0);
   };
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', () => void shutdown());
+  process.on('SIGINT', () => void shutdown());
 }
 
 main().catch((err) => {

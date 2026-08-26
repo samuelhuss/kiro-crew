@@ -14,7 +14,9 @@ export const logger = winston.createLogger({
   defaultMeta: { service: 'aws-discovery-mcp' },
   transports: [
     new winston.transports.Console({
-      stderrLevels: ['error', 'warn'],
+      // ALL logs go to stderr — stdout is reserved exclusively for MCP JSON-RPC.
+      // If ANY text leaks to stdout, the MCP gateway disconnects the server.
+      stderrLevels: ['error', 'warn', 'info', 'debug'],
     }),
   ],
 });

@@ -9,6 +9,14 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { LambdaClient } from '@aws-sdk/client-lambda';
 import { IAMClient } from '@aws-sdk/client-iam';
 import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { CloudWatchLogsClient } from '@aws-sdk/client-cloudwatch-logs';
+import { Route53Client } from '@aws-sdk/client-route-53';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { ECRClient } from '@aws-sdk/client-ecr';
+import { SQSClient } from '@aws-sdk/client-sqs';
+import { SNSClient } from '@aws-sdk/client-sns';
+import { ElastiCacheClient } from '@aws-sdk/client-elasticache';
+import { CloudFrontClient } from '@aws-sdk/client-cloudfront';
 import { logger } from './logger.js';
 
 /**
@@ -30,6 +38,14 @@ export interface AwsClientSet {
   lambda: LambdaClient;
   iam: IAMClient;
   secretsManager: SecretsManagerClient;
+  cloudwatchLogs: CloudWatchLogsClient;
+  route53: Route53Client;
+  dynamodb: DynamoDBClient;
+  ecr: ECRClient;
+  sqs: SQSClient;
+  sns: SNSClient;
+  elasticache: ElastiCacheClient;
+  cloudfront: CloudFrontClient;
   sts: STSClient;
 }
 
@@ -53,6 +69,16 @@ export function getClients(region: string): AwsClientSet {
     // IAM is a global service — region is ignored but required by SDK
     iam: new IAMClient({ region: 'us-east-1' }),
     secretsManager: new SecretsManagerClient(config),
+    cloudwatchLogs: new CloudWatchLogsClient(config),
+    // Route53 is global — region is required by SDK but unused
+    route53: new Route53Client({ region: 'us-east-1' }),
+    dynamodb: new DynamoDBClient(config),
+    ecr: new ECRClient(config),
+    sqs: new SQSClient(config),
+    sns: new SNSClient(config),
+    elasticache: new ElastiCacheClient(config),
+    // CloudFront is global
+    cloudfront: new CloudFrontClient({ region: 'us-east-1' }),
     sts: new STSClient(config),
   };
 

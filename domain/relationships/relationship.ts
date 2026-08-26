@@ -11,6 +11,9 @@ export type RelationshipType =
   | 'CONNECTS_TO'      // ECS service -> RDS
   | 'ATTACHES_TO'      // IGW -> VPC
   | 'ROUTES_THROUGH'   // subnet -> route table
+  | 'ATTACHED_TO'      // EBS volume -> EC2 instance
+  | 'ASSOCIATED_WITH'  // EIP -> instance/ENI
+  | 'LOGS_FOR'         // CloudWatch log group -> Lambda function
   | 'EXPOSES';         // lambda -> function URL (future)
 
 export interface ResourceRelationship {
