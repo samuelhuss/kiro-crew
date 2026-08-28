@@ -84,7 +84,7 @@ $('btn-start').onclick = () => {
     + `e me mostre o plano completo antes de executar.`;
   goStep(3);
   setStage('discovery', 'active');
-  $('narration').innerHTML = '<span class="cursor"></span>';
+  chatEl().innerHTML = '<div class="empty-hint">Aguardando o orquestrador…</div>';
   startChat(msg, true);
 };
 
@@ -113,29 +113,97 @@ function advanceStage(name) {
   });
 }
 
-// smooth typewriter: buffer incoming chunks, drain at a steady rate
-const typer = { buf: '', el: null, timer: null };
+// ── Chat rendering (message bubbles + minimal markdown) ───────────────────────
+const chat = { buf: '', agentRaw: '', agentBubble: null, timer: null };
+
+function chatEl() { return $('chat'); }
+function clearHint() { const h = chatEl().querySelector('.empty-hint'); if (h) h.remove(); }
+
+/** Minimal, safe markdown → HTML (escapes first, then applies a small subset). */
+function mdToHtml(src) {
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // extract fenced code blocks first
+  const blocks = [];
+  src = src.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    blocks.push(`<pre><code>${esc(code.replace(/\n$/, ''))}</code></pre>`);
+    return `\u0000${blocks.length - 1}\u0000`;
+  });
+  let html = esc(src);
+  // inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // bold / italic
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+  // headings
+  html = html.replace(/^#{1,6}\s+(.+)$/gm, '<h3>$1</h3>');
+  // bullet / numbered lists
+  html = html.replace(/(?:^[-*]\s+.+(?:\n|$))+/gm, (m) => {
+    const items = m.trim().split('\n').map((l) => `<li>${l.replace(/^[-*]\s+/, '')}</li>`).join('');
+    return `<ul>${items}</ul>`;
+  });
+  html = html.replace(/(?:^\d+\.\s+.+(?:\n|$))+/gm, (m) => {
+    const items = m.trim().split('\n').map((l) => `<li>${l.replace(/^\d+\.\s+/, '')}</li>`).join('');
+    return `<ol>${items}</ol>`;
+  });
+  // paragraphs from remaining double-newline blocks
+  html = html.split(/\n{2,}/).map((chunk) => {
+    if (/^\s*<(h3|ul|ol|pre)/.test(chunk)) return chunk;
+    return `<p>${chunk.replace(/\n/g, '<br>')}</p>`;
+  }).join('');
+  // restore code blocks
+  html = html.replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[Number(i)]);
+  return html;
+}
+
+function newAgentBubble() {
+  clearHint();
+  const msg = document.createElement('div');
+  msg.className = 'msg agent';
+  msg.innerHTML = `<div class="avatar">c</div><div class="bubble"><span class="cursor"></span></div>`;
+  chatEl().appendChild(msg);
+  chat.agentBubble = msg.querySelector('.bubble');
+  chat.agentRaw = '';
+  scrollChat();
+}
+
+function addUserBubble(text) {
+  clearHint();
+  finishAgentBubble(); // close any open agent bubble first
+  const msg = document.createElement('div');
+  msg.className = 'msg user';
+  msg.innerHTML = `<div class="avatar">▲</div><div class="bubble"></div>`;
+  msg.querySelector('.bubble').textContent = text;
+  chatEl().appendChild(msg);
+  scrollChat();
+}
+
+function finishAgentBubble() {
+  if (chat.agentBubble) {
+    chat.agentBubble.innerHTML = mdToHtml(chat.agentRaw);
+    chat.agentBubble = null;
+  }
+}
+
+function scrollChat() {
+  const body = chatEl().closest('.body');
+  if (body) body.scrollTop = body.scrollHeight;
+}
+
+// smooth streaming: buffer chunks, drain steadily, re-render current bubble as markdown
 function typeInto(text) {
-  if (!typer.el) typer.el = $('narration');
-  typer.buf += text;
-  if (!typer.timer) drain();
+  chat.buf += text;
+  if (!chat.timer) drain();
 }
 function drain() {
-  if (!typer.buf.length) { typer.timer = null; return; }
-  const n = Math.max(2, Math.ceil(typer.buf.length / 60)); // catch up if far behind
-  const chunk = typer.buf.slice(0, n);
-  typer.buf = typer.buf.slice(n);
-  const cursor = typer.el.querySelector('.cursor');
-  const node = document.createTextNode(chunk);
-  if (cursor) typer.el.insertBefore(node, cursor); else typer.el.appendChild(node);
-  const body = typer.el.closest('.body'); if (body) body.scrollTop = body.scrollHeight;
-  typer.timer = setTimeout(drain, 16);
-}
-function narrateRaw(text) { // instant (user lines)
-  const cursor = $('narration').querySelector('.cursor');
-  const div = document.createElement('div');
-  div.className = 'userline'; div.textContent = text;
-  if (cursor) $('narration').insertBefore(div, cursor); else $('narration').appendChild(div);
+  if (!chat.buf.length) { chat.timer = null; return; }
+  if (!chat.agentBubble) newAgentBubble();
+  const n = Math.max(3, Math.ceil(chat.buf.length / 50));
+  chat.agentRaw += chat.buf.slice(0, n);
+  chat.buf = chat.buf.slice(n);
+  // render markdown live, keep a cursor at the end
+  chat.agentBubble.innerHTML = mdToHtml(chat.agentRaw) + '<span class="cursor"></span>';
+  scrollChat();
+  chat.timer = setTimeout(drain, 18);
 }
 
 function addToolCall(name, status) {
@@ -179,6 +247,7 @@ function openStream() {
       case 'tool_call':
       case 'tool_update': addToolCall(evt.toolName || 'tool', evt.toolStatus || ''); break;
       case 'turn_end':
+        finishAgentBubble();
         $('approval').classList.add('show');
         $('btn-send').disabled = false;
         break;
@@ -190,7 +259,7 @@ function openStream() {
 
 $('btn-send').onclick = () => {
   const msg = $('composer').value.trim(); if (!msg) return;
-  narrateRaw('› ' + msg);
+  addUserBubble(msg);
   $('composer').value = ''; $('btn-send').disabled = true;
   $('approval').classList.remove('show');
   startChat(msg, false);
@@ -198,7 +267,7 @@ $('btn-send').onclick = () => {
 $('composer').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !$('btn-send').disabled) $('btn-send').click(); });
 
 $('btn-approve').onclick = () => {
-  narrateRaw('› Pode executar a migração.');
+  addUserBubble('Pode executar a migração.');
   $('approval').classList.remove('show');
   STAGE_ORDER.forEach((s) => setStage(s, 'done'));
   startChat('Pode executar a migração, siga fase por fase.', false);
