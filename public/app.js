@@ -113,62 +113,127 @@ function advanceStage(name) {
   });
 }
 
-// ── Chat rendering (message bubbles + minimal markdown) ───────────────────────
-const chat = { buf: '', agentRaw: '', agentBubble: null, timer: null };
+// ── Chat rendering (multi-bubble + artifact cards) ───────────────────────────
+const chat = { buf: '', turnRaw: '', turnEl: null, curStage: null, timer: null };
 
 function chatEl() { return $('chat'); }
 function clearHint() { const h = chatEl().querySelector('.empty-hint'); if (h) h.remove(); }
+function scrollChat() { const b = chatEl().closest('.body'); if (b) b.scrollTop = b.scrollHeight; }
 
-/** Minimal, safe markdown → HTML (escapes first, then applies a small subset). */
-function mdToHtml(src) {
-  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  // extract fenced code blocks first
-  const blocks = [];
-  src = src.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    blocks.push(`<pre><code>${esc(code.replace(/\n$/, ''))}</code></pre>`);
-    return `\u0000${blocks.length - 1}\u0000`;
-  });
+const STAGE_LABEL = { discovery: 'Discovery', graph: 'Grafo', assessment: 'Assessment', cfn: 'CloudFormation' };
+const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** Minimal, safe inline+block markdown for a PROSE segment (no fenced code). */
+function mdProse(src) {
   let html = esc(src);
-  // inline code
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-  // bold / italic
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-  // headings
   html = html.replace(/^#{1,6}\s+(.+)$/gm, '<h3>$1</h3>');
-  // bullet / numbered lists
-  html = html.replace(/(?:^[-*]\s+.+(?:\n|$))+/gm, (m) => {
-    const items = m.trim().split('\n').map((l) => `<li>${l.replace(/^[-*]\s+/, '')}</li>`).join('');
-    return `<ul>${items}</ul>`;
-  });
-  html = html.replace(/(?:^\d+\.\s+.+(?:\n|$))+/gm, (m) => {
-    const items = m.trim().split('\n').map((l) => `<li>${l.replace(/^\d+\.\s+/, '')}</li>`).join('');
-    return `<ol>${items}</ol>`;
-  });
-  // paragraphs from remaining double-newline blocks
-  html = html.split(/\n{2,}/).map((chunk) => {
-    if (/^\s*<(h3|ul|ol|pre)/.test(chunk)) return chunk;
-    return `<p>${chunk.replace(/\n/g, '<br>')}</p>`;
+  html = html.replace(/(?:^[-*]\s+.+(?:\n|$))+/gm, (m) =>
+    '<ul>' + m.trim().split('\n').map((l) => `<li>${l.replace(/^[-*]\s+/, '')}</li>`).join('') + '</ul>');
+  html = html.replace(/(?:^\d+\.\s+.+(?:\n|$))+/gm, (m) =>
+    '<ol>' + m.trim().split('\n').map((l) => `<li>${l.replace(/^\d+\.\s+/, '')}</li>`).join('') + '</ol>');
+  html = html.split(/\n{2,}/).map((c) => {
+    if (/^\s*<(h3|ul|ol)/.test(c)) return c;
+    return c.trim() ? `<p>${c.replace(/\n/g, '<br>')}</p>` : '';
   }).join('');
-  // restore code blocks
-  html = html.replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[Number(i)]);
   return html;
 }
 
-function newAgentBubble() {
+/** Classify a fenced code block into an artifact descriptor. */
+function classifyArtifact(lang, code) {
+  const l = (lang || '').toLowerCase();
+  const head = code.slice(0, 400);
+  if (l === 'yaml' || l === 'yml' || /AWSTemplateFormatVersion|Resources:\s*\n/.test(head)) {
+    const type = /AWSTemplateFormatVersion|Type:\s*AWS::/.test(head) ? 'CloudFormation' : 'YAML';
+    return { icon: '⌘', title: type + ' template', kind: 'cfn' };
+  }
+  if (l === 'json' || /^\s*[{[]/.test(head)) return { icon: '{}', title: 'JSON', kind: 'json' };
+  if (l === 'md' || l === 'markdown' || /^#\s|Migration Manifest/i.test(head)) return { icon: '☰', title: 'Manifest', kind: 'manifest' };
+  return { icon: '›', title: (lang || 'código'), kind: 'code' };
+}
+
+/**
+ * Parse the current turn's raw text into ordered segments:
+ *   { t:'prose', text } | { t:'artifact', lang, code }
+ * Fenced code blocks become artifacts; a trailing UNCLOSED fence is a
+ * still-streaming artifact.
+ */
+function parseSegments(raw) {
+  const segs = [];
+  const re = /```(\w*)\n?([\s\S]*?)```/g;
+  let last = 0, m;
+  while ((m = re.exec(raw)) !== null) {
+    if (m.index > last) segs.push({ t: 'prose', text: raw.slice(last, m.index) });
+    segs.push({ t: 'artifact', lang: m[1], code: m[2].replace(/\n$/, ''), streaming: false });
+    last = re.lastIndex;
+  }
+  const tail = raw.slice(last);
+  const openFence = tail.match(/```(\w*)\n?([\s\S]*)$/);
+  if (openFence) {
+    if (openFence.index > 0) segs.push({ t: 'prose', text: tail.slice(0, openFence.index) });
+    segs.push({ t: 'artifact', lang: openFence[1], code: openFence[2], streaming: true });
+  } else if (tail.length) {
+    segs.push({ t: 'prose', text: tail });
+  }
+  return segs;
+}
+
+/** Build the DOM for one agent turn from its raw text (multiple bubbles + cards). */
+function renderTurn(container, raw, showCursor) {
+  const segs = parseSegments(raw);
+  let html = '';
+  let bubbleOpen = false;
+  const badge = () => (chat.curStage ? `<span class="step-badge"><span class="b-dot"></span>${STAGE_LABEL[chat.curStage] || ''}</span>` : '');
+  const openBubble = () => { if (!bubbleOpen) { html += `<div class="msg agent"><div class="avatar">c</div><div class="col">${badge()}`; bubbleOpen = true; } };
+  const closeBubble = () => { if (bubbleOpen) { html += '</div></div>'; bubbleOpen = false; } };
+
+  segs.forEach((s) => {
+    if (s.t === 'prose') {
+      const inner = mdProse(s.text);
+      if (!inner.trim()) return;
+      openBubble();
+      html += `<div class="bubble">${inner}</div>`;
+    } else {
+      closeBubble();
+      const a = classifyArtifact(s.lang, s.code);
+      const lines = s.code.split('\n').length;
+      const bytes = new Blob([s.code]).size;
+      const openCls = s.streaming ? ' open' : '';
+      html += `<div class="msg agent"><div class="avatar">c</div><div class="col" style="width:100%">`
+        + `<div class="artifact${openCls}" data-code="${encodeURIComponent(s.code)}">`
+        + `<div class="a-head"><div class="a-ic">${a.icon}</div>`
+        + `<div class="a-meta"><div class="a-title">${esc(a.title)}</div>`
+        + `<div class="a-sub">${lines} linhas · ${(bytes / 1024).toFixed(1)} KB${s.streaming ? ' · gerando…' : ''}</div></div>`
+        + `<div class="a-actions"><button class="a-btn a-copy">copiar</button><span class="a-chevron">▶</span></div></div>`
+        + `<div class="a-body"><pre>${esc(s.code)}</pre></div></div></div></div>`;
+    }
+  });
+  closeBubble();
+  container.innerHTML = html;
+  if (showCursor) {
+    const bubbles = container.querySelectorAll('.msg.agent .bubble');
+    const lastB = bubbles[bubbles.length - 1];
+    if (lastB) lastB.insertAdjacentHTML('beforeend', '<span class="cursor"></span>');
+  }
+}
+
+function startTurn() {
   clearHint();
-  const msg = document.createElement('div');
-  msg.className = 'msg agent';
-  msg.innerHTML = `<div class="avatar">c</div><div class="bubble"><span class="cursor"></span></div>`;
-  chatEl().appendChild(msg);
-  chat.agentBubble = msg.querySelector('.bubble');
-  chat.agentRaw = '';
-  scrollChat();
+  const wrap = document.createElement('div');
+  wrap.className = 'turn';
+  chatEl().appendChild(wrap);
+  chat.turnEl = wrap;
+  chat.turnRaw = '';
+}
+function finishTurn() {
+  if (chat.turnEl) { renderTurn(chat.turnEl, chat.turnRaw, false); wireArtifacts(chat.turnEl); chat.turnEl = null; }
 }
 
 function addUserBubble(text) {
   clearHint();
-  finishAgentBubble(); // close any open agent bubble first
+  finishTurn();
   const msg = document.createElement('div');
   msg.className = 'msg user';
   msg.innerHTML = `<div class="avatar">▲</div><div class="bubble"></div>`;
@@ -177,31 +242,36 @@ function addUserBubble(text) {
   scrollChat();
 }
 
-function finishAgentBubble() {
-  if (chat.agentBubble) {
-    chat.agentBubble.innerHTML = mdToHtml(chat.agentRaw);
-    chat.agentBubble = null;
-  }
+// collapse/expand + copy on artifact cards
+function wireArtifacts(root) {
+  root.querySelectorAll('.artifact').forEach((art) => {
+    if (art.dataset.wired) return; art.dataset.wired = '1';
+    art.querySelector('.a-head').addEventListener('click', (e) => {
+      if (e.target.classList.contains('a-copy')) return;
+      art.classList.toggle('open');
+    });
+    const copy = art.querySelector('.a-copy');
+    if (copy) copy.addEventListener('click', () => {
+      navigator.clipboard.writeText(decodeURIComponent(art.dataset.code || '')).then(() => {
+        copy.textContent = 'copiado ✓'; setTimeout(() => (copy.textContent = 'copiar'), 1500);
+      });
+    });
+  });
 }
 
-function scrollChat() {
-  const body = chatEl().closest('.body');
-  if (body) body.scrollTop = body.scrollHeight;
-}
-
-// smooth streaming: buffer chunks, drain steadily, re-render current bubble as markdown
+// smooth streaming: buffer chunks, drain steadily, re-render the current turn
 function typeInto(text) {
   chat.buf += text;
   if (!chat.timer) drain();
 }
 function drain() {
   if (!chat.buf.length) { chat.timer = null; return; }
-  if (!chat.agentBubble) newAgentBubble();
+  if (!chat.turnEl) startTurn();
   const n = Math.max(3, Math.ceil(chat.buf.length / 50));
-  chat.agentRaw += chat.buf.slice(0, n);
+  chat.turnRaw += chat.buf.slice(0, n);
   chat.buf = chat.buf.slice(n);
-  // render markdown live, keep a cursor at the end
-  chat.agentBubble.innerHTML = mdToHtml(chat.agentRaw) + '<span class="cursor"></span>';
+  renderTurn(chat.turnEl, chat.turnRaw, true);
+  wireArtifacts(chat.turnEl);
   scrollChat();
   chat.timer = setTimeout(drain, 18);
 }
@@ -209,7 +279,7 @@ function drain() {
 function addToolCall(name, status) {
   const stage = TOOL_STAGE[name] || (name && name.toLowerCase().includes('cloudformation') ? 'cfn' : null);
   const done = /complet|success|done|finish/i.test(status);
-  if (stage) { if (done) setStage(stage, 'done'); else advanceStage(stage); }
+  if (stage) { chat.curStage = stage; if (done) setStage(stage, 'done'); else advanceStage(stage); }
 
   const log = $('toolcalls');
   const key = 'tc-' + name.replace(/[^\w]/g, '');
@@ -247,7 +317,7 @@ function openStream() {
       case 'tool_call':
       case 'tool_update': addToolCall(evt.toolName || 'tool', evt.toolStatus || ''); break;
       case 'turn_end':
-        finishAgentBubble();
+        finishTurn();
         $('approval').classList.add('show');
         $('btn-send').disabled = false;
         break;
