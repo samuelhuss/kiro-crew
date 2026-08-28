@@ -2,14 +2,19 @@ import type { MigrationPlan, MigrationPlanPhase, MigrationAction, MigrationRequi
 import type { ResourceType } from '../resources/resource.js';
 
 /**
- * CloudFormation Template Generator
+ * CloudFormation Template Generator — FALLBACK / SCAFFOLD path.
  *
- * Takes a MigrationPlan and produces YAML CloudFormation templates — one per
- * phase/stack. Templates use Parameters for environment-specific values so
- * they are reusable across deployments.
+ * ⚠️ This produces SCAFFOLD templates (structure + placeholders) from the plan.
+ * For FAITHFUL templates that reproduce the real resource config, use
+ * `iac-generator.ts` (generateFaithfulTemplate) — that is the PRIMARY path,
+ * backed by the AWS CloudFormation IaC Generator + AWS Config.
  *
- * Templates are generated as STRINGS (YAML) — never executed. The validation
- * step (cfn-lint, validate-template, changeset) runs separately.
+ * This generator remains useful for:
+ *   - Resource types NOT supported by the IaC Generator (isIacGeneratorSupported=false)
+ *   - Offline/no-credentials scaffolding to review the phase structure
+ *   - A skeleton to hand-edit when the real config is not needed
+ *
+ * Templates are strings (YAML) — never executed. Validation runs separately.
  */
 
 // CloudFormation resource type mapping

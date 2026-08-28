@@ -98,7 +98,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'generate_cfn_templates',
       description:
-        'Generate CloudFormation YAML templates from the last migration plan. One template per phase/stack. Returns file paths and template summaries.',
+        'Generate SCAFFOLD CloudFormation templates from the plan (structure + placeholders). FALLBACK path — for a FAITHFUL template that reproduces the real config, prefer generate_faithful_cfn. Use this only for resource types the IaC Generator does not support, or for offline structure review.',
       inputSchema: { type: 'object', properties: {} },
     },
     {
