@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AWS Migration Console</title>
+  <style>
+    :root {
+      --bg: #0f1420; --panel: #1a2030; --border: #2a3244; --text: #e2e8f0;
+      --muted: #94a3b8; --accent: #38bdf8; --ok: #34d399; --warn: #fbbf24;
+      --err: #f87171; --pending: #475569;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 24px; }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    .sub { color: var(--muted); margin-bottom: 24px; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+    .panel h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 16px; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .col { flex: 1; min-width: 260px; }
+    label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+    input, select { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; color: var(--text); font: inherit; }
+    button { background: var(--accent); color: #04121f; border: none; border-radius: 6px; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer; }
+    button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .arrow { display: flex; align-items: center; justify-content: center; font-size: 24px; color: var(--accent); }
+    /* Pipeline stages */
+    .pipeline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+    .stage { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; border: 1px solid var(--border); font-size: 13px; }
+    .stage .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pending); }
+    .stage.done .dot { background: var(--ok); }
+    .stage.active .dot { background: var(--accent); animation: pulse 1s infinite; }
+    .stage.failed .dot { background: var(--err); }
+    @keyframes pulse { 50% { opacity: 0.4; } }
+    /* Resource list */
+    .resource { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .resource:last-child { border-bottom: none; }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
+    /* Execution phases */
+    .phase { margin: 12px 0; }
+    .phase-head { display: flex; justify-content: space-between; align-items: center; }
+    .progress { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+    .progress-bar { height: 100%; background: var(--accent); width: 0%; transition: width 0.3s; }
+    .status-ok { color: var(--ok); } .status-warn { color: var(--warn); } .status-err { color: var(--err); } .status-pending { color: var(--muted); }
+    .cost { font-size: 13px; color: var(--warn); }
+    pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow: auto; max-height: 300px; font-size: 12px; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <h1>AWS Migration Console</h1>
+  <div class="sub">Discovery → Graph → Assessment → Faithful CloudFormation → Execution</div>
+
+  <!-- SETUP -->
+  <div class="panel" id="setup-panel">
+    <h2>1 · Setup</h2>
+    <div class="row">
+      <div class="col">
+        <strong>Source</strong>
+        <label>Region</label><input id="src-region" value="us-east-1">
+        <label>Access Key ID</label><input id="src-key" placeholder="ASIA...">
+        <label>Secret Access Key</label><input id="src-secret" type="password">
+        <label>Session Token</label><input id="src-token" type="password">
+      </div>
+      <div class="arrow">▶</div>
+      <div class="col">
+        <strong>Target</strong>
+        <label>Region</label><input id="tgt-region" value="sa-east-1">
+        <label>Account ID</label><input id="tgt-account" placeholder="123456789012">
+        <label>Access Key ID</label><input id="tgt-key" placeholder="ASIA...">
+        <label>Secret Access Key</label><input id="tgt-secret" type="password">
+        <label>Session Token</label><input id="tgt-token" type="password">
+      </div>
+    </div>
+    <div style="margin-top:16px"><button id="btn-discover">Discover Infrastructure</button></div>
+  </div>
+
+  <!-- PLAN -->
+  <div class="panel hidden" id="plan-panel">
+    <h2>2 · Plan</h2>
+    <div class="pipeline" id="pipeline">
+      <div class="stage" data-stage="discovery"><span class="dot"></span>Discovery</div>
+      <div class="stage" data-stage="graph"><span class="dot"></span>Graph</div>
+      <div class="stage" data-stage="assessment"><span class="dot"></span>Assessment</div>
+      <div class="stage" data-stage="cfn"><span class="dot"></span>Faithful CFN</div>
+    </div>
+    <div id="resource-list" style="margin:16px 0"></div>
+    <div class="cost" id="cost-summary"></div>
+    <div style="margin-top:16px">
+      <button class="secondary" id="btn-view-cfn">View CloudFormation</button>
+      <button class="secondary" id="btn-view-manifest">View Manifest</button>
+      <button id="btn-plan">Generate Plan</button>
+    </div>
+    <pre class="hidden" id="cfn-view"></pre>
+  </div>
+
+  <!-- EXECUTE -->
+  <div class="panel hidden" id="execute-panel">
+    <h2>3 · Execute</h2>
+    <div id="approval" class="status-warn" style="margin-bottom:16px">⚠️ Review the plan above. Execution creates resources in the TARGET only. Source is never modified.</div>
+    <div id="phases">
+      <div class="phase" data-phase="networking"><div class="phase-head"><span>▸ Networking</span><span class="status-pending">pending</span></div><div class="progress"><div class="progress-bar"></div></div></div>
+      <div class="phase" data-phase="data"><div class="phase-head"><span>▸ Data (AMI / Snapshot copy)</span><span class="status-pending">pending</span></div><div class="progress"><div class="progress-bar"></div></div></div>
+      <div class="phase" data-phase="compute"><div class="phase-head"><span>▸ Compute</span><span class="status-pending">pending</span></div><div class="progress"><div class="progress-bar"></div></div></div>
+      <div class="phase" data-phase="validate"><div class="phase-head"><span>▸ Validation</span><span class="status-pending">pending</span></div><div class="progress"><div class="progress-bar"></div></div></div>
+    </div>
+    <div style="margin-top:16px">
+      <button id="btn-execute">▶ Execute Migration</button>
+      <button class="secondary" id="btn-rollback">↩ Rollback</button>
+    </div>
+    <pre class="hidden" id="exec-log"></pre>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
