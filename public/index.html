@@ -4,84 +4,296 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AWS Migration Console</title>
+  <link rel="icon" href="data:,">
   <style>
     :root {
-      --bg:#0f1420; --panel:#1a2030; --border:#2a3244; --text:#e2e8f0;
-      --muted:#94a3b8; --accent:#38bdf8; --ok:#34d399; --err:#f87171; --pending:#475569;
+      --bg: #0b0e14;
+      --bg-soft: #10141d;
+      --surface: #141925;
+      --surface-2: #1b2130;
+      --border: #232b3d;
+      --border-soft: #1a2130;
+      --text: #e6ebf4;
+      --muted: #8792a8;
+      --faint: #566072;
+      --accent: #5b9dff;
+      --accent-soft: #2a3f63;
+      --ok: #3ddc97;
+      --run: #5b9dff;
+      --err: #ff6b6b;
+      --radius: 14px;
+      --shadow: 0 8px 40px rgba(0,0,0,.35);
+      --mono: "SF Mono", "JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
     }
-    * { box-sizing:border-box; margin:0; padding:0; }
-    body { background:var(--bg); color:var(--text); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; padding:24px; }
-    h1 { font-size:20px; } .sub { color:var(--muted); margin-bottom:20px; }
-    .panel { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:20px; margin-bottom:16px; }
-    .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin-bottom:14px; }
-    .row { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end; }
-    .col { flex:1; min-width:180px; }
-    label { display:block; font-size:12px; color:var(--muted); margin:6px 0 4px; }
-    input { width:100%; background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:8px 10px; color:var(--text); font:inherit; }
-    button { background:var(--accent); color:#04121f; border:none; border-radius:6px; padding:10px 18px; font:inherit; font-weight:600; cursor:pointer; }
-    button.secondary { background:transparent; color:var(--accent); border:1px solid var(--accent); }
-    button:disabled { opacity:.4; cursor:not-allowed; }
-    .arrow { font-size:22px; color:var(--accent); align-self:center; }
-    .pipeline { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
-    .stage { display:flex; align-items:center; gap:6px; padding:6px 12px; border-radius:20px; border:1px solid var(--border); font-size:13px; }
-    .stage .dot { width:8px; height:8px; border-radius:50%; background:var(--pending); }
-    .stage.done .dot { background:var(--ok); }
-    .stage.active .dot { background:var(--accent); animation:pulse 1s infinite; }
-    @keyframes pulse { 50% { opacity:.4; } }
-    .streams { display:flex; gap:16px; flex-wrap:wrap; }
-    .stream { flex:1; min-width:300px; }
-    pre { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:12px; height:280px; overflow:auto; font-size:12px; white-space:pre-wrap; word-break:break-word; }
-    .composer { display:flex; gap:8px; margin-top:12px; }
-    .composer input { flex:1; }
-    .hidden { display:none; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      background: radial-gradient(1200px 600px at 50% -10%, #131a28 0%, var(--bg) 55%);
+      color: var(--text);
+      font: 15px/1.6 var(--sans);
+      -webkit-font-smoothing: antialiased;
+      display: flex; flex-direction: column;
+      min-height: 100vh;
+    }
+
+    /* ── Top bar ─────────────────────────────────────────────── */
+    header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 18px 28px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .logo { width: 26px; height: 26px; border-radius: 7px;
+      background: linear-gradient(135deg, var(--accent), #7c5bff);
+      display: grid; place-items: center; font-weight: 700; font-size: 14px; color: #fff; }
+    header h1 { font-size: 15px; font-weight: 600; letter-spacing: .2px; }
+    header .tag { margin-left: auto; font-size: 12px; color: var(--faint);
+      border: 1px solid var(--border); border-radius: 20px; padding: 4px 12px; }
+
+    /* ── Stepper ─────────────────────────────────────────────── */
+    .stepper { display: flex; justify-content: center; gap: 8px; padding: 22px 0 8px; }
+    .step-pill { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--faint);
+      transition: color .3s ease; }
+    .step-pill .n { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+      border: 1px solid var(--border); font-size: 12px; transition: all .3s ease; }
+    .step-pill.active { color: var(--text); }
+    .step-pill.active .n { border-color: var(--accent); background: var(--accent-soft); color: #fff; }
+    .step-pill.done .n { border-color: var(--ok); background: rgba(61,220,151,.12); color: var(--ok); }
+    .step-sep { width: 26px; height: 1px; background: var(--border); align-self: center; }
+
+    /* ── Main / cards ────────────────────────────────────────── */
+    main { flex: 1; display: flex; align-items: flex-start; justify-content: center;
+      padding: 20px 20px 60px; }
+    .card {
+      width: 100%; max-width: 560px;
+      background: linear-gradient(180deg, var(--surface) 0%, var(--bg-soft) 100%);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 32px;
+      animation: rise .45s cubic-bezier(.2,.7,.2,1) both;
+    }
+    .card.wide { max-width: 920px; }
+    @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.99); } to { opacity: 1; transform: none; } }
+
+    .card h2 { font-size: 19px; font-weight: 650; margin-bottom: 6px; letter-spacing: .2px; }
+    .card .desc { color: var(--muted); font-size: 13.5px; margin-bottom: 24px; }
+
+    .field { margin-bottom: 16px; }
+    .field label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 7px; font-weight: 500; }
+    input, textarea {
+      width: 100%; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 10px; padding: 11px 13px; color: var(--text); font: inherit; font-size: 14px;
+      transition: border-color .2s ease, box-shadow .2s ease;
+    }
+    input::placeholder { color: var(--faint); }
+    input:focus, textarea:focus { outline: none; border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(91,157,255,.12); }
+    input.mono { font-family: var(--mono); font-size: 13px; letter-spacing: .3px; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+    /* segmented tabs (source/target) */
+    .seg { display: flex; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 10px; padding: 3px; margin-bottom: 20px; }
+    .seg button { flex: 1; background: transparent; border: none; color: var(--muted);
+      padding: 8px; border-radius: 7px; font: inherit; font-size: 13px; cursor: pointer;
+      transition: all .25s ease; }
+    .seg button.on { background: var(--surface-2); color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+
+    /* buttons */
+    .actions { display: flex; gap: 10px; margin-top: 26px; }
+    button.btn { border: none; border-radius: 10px; padding: 12px 20px; font: inherit; font-weight: 600;
+      font-size: 14px; cursor: pointer; transition: transform .12s ease, filter .2s ease, background .2s ease; }
+    button.btn:active { transform: translateY(1px) scale(.99); }
+    .btn.primary { background: linear-gradient(135deg, var(--accent), #4a86f0); color: #fff; flex: 1; }
+    .btn.primary:hover { filter: brightness(1.08); }
+    .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+    .btn.ghost:hover { border-color: var(--accent); color: var(--text); }
+    .btn.ok { background: linear-gradient(135deg, var(--ok), #2fc085); color: #04231a; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+
+    .hint { font-size: 12px; color: var(--faint); margin-top: 14px; line-height: 1.5; }
+    .status-line { font-size: 12.5px; margin-top: 14px; padding: 10px 12px; border-radius: 9px;
+      background: rgba(61,220,151,.08); border: 1px solid rgba(61,220,151,.25); color: var(--ok);
+      display: none; }
+    .status-line.err { background: rgba(255,107,107,.08); border-color: rgba(255,107,107,.3); color: var(--err); }
+    .status-line.show { display: block; animation: rise .3s ease both; }
+
+    /* ── Pipeline (step 3) ───────────────────────────────────── */
+    .pipe-head { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
+    .pipe-head h2 { margin: 0; }
+    .pipe-head .route { margin-left: auto; font-family: var(--mono); font-size: 13px; color: var(--muted); }
+    .pipe-head .route b { color: var(--accent); }
+
+    .stages { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 22px; }
+    .stage { position: relative; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 11px; padding: 14px; overflow: hidden; transition: border-color .3s ease; }
+    .stage .top { display: flex; align-items: center; gap: 8px; }
+    .stage .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none;
+      transition: background .3s ease, box-shadow .3s ease; }
+    .stage .name { font-size: 12.5px; font-weight: 600; }
+    .stage .sub { font-size: 11px; color: var(--faint); margin-top: 4px; }
+    .stage.active { border-color: var(--accent); }
+    .stage.active .dot { background: var(--run); box-shadow: 0 0 0 4px rgba(91,157,255,.18); animation: pulse 1.4s infinite; }
+    .stage.done { border-color: rgba(61,220,151,.4); }
+    .stage.done .dot { background: var(--ok); box-shadow: 0 0 0 4px rgba(61,220,151,.14); }
+    .stage.active::after { content:""; position:absolute; left:0; bottom:0; height:2px; width:100%;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      animation: sweep 1.6s linear infinite; }
+    @keyframes pulse { 50% { opacity: .55; } }
+    @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+    .panes { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
+    .pane { background: var(--bg); border: 1px solid var(--border); border-radius: 11px;
+      display: flex; flex-direction: column; min-height: 340px; }
+    .pane h3 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint);
+      padding: 12px 14px; border-bottom: 1px solid var(--border-soft); }
+    .pane .body { flex: 1; overflow-y: auto; padding: 14px; }
+    .narration { font-size: 13.5px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+    .narration .cursor { display: inline-block; width: 7px; height: 15px; background: var(--accent);
+      vertical-align: text-bottom; margin-left: 1px; animation: blink 1s step-end infinite; border-radius: 1px; }
+    @keyframes blink { 50% { opacity: 0; } }
+    .userline { color: var(--accent); font-weight: 600; margin: 14px 0 4px; }
+
+    .toolrow { display: flex; align-items: center; gap: 9px; padding: 7px 0; font-family: var(--mono);
+      font-size: 12px; border-bottom: 1px solid var(--border-soft); animation: rise .3s ease both; }
+    .toolrow:last-child { border-bottom: none; }
+    .toolrow .ic { width: 16px; height: 16px; flex: none; display: grid; place-items: center; }
+    .spin { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: rot .7s linear infinite; }
+    @keyframes rot { to { transform: rotate(360deg); } }
+    .check { color: var(--ok); font-size: 13px; }
+    .toolrow .tn { color: var(--text); }
+    .toolrow .ts { margin-left: auto; font-size: 10.5px; color: var(--faint); }
+
+    .composer { display: flex; gap: 10px; margin-top: 16px; }
+    .composer input { flex: 1; }
+
+    /* approval banner */
+    .approval { margin-top: 16px; padding: 16px; border-radius: 11px; display: none;
+      background: linear-gradient(135deg, rgba(91,157,255,.12), rgba(124,91,255,.08));
+      border: 1px solid var(--accent-soft); align-items: center; gap: 14px; animation: rise .4s ease both; }
+    .approval.show { display: flex; }
+    .approval .txt { flex: 1; font-size: 13.5px; }
+    .approval .txt b { color: var(--accent); }
+
+    .hidden { display: none !important; }
+    ::-webkit-scrollbar { width: 9px; height: 9px; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--surface-2); }
   </style>
 </head>
 <body>
-  <h1>AWS Migration Console</h1>
-  <div class="sub">Visual do orquestrador — você vê tudo que o agente faz, em tempo real</div>
+  <header>
+    <div class="logo">▲</div>
+    <h1>AWS Migration Console</h1>
+    <div class="tag">orquestrador ao vivo</div>
+  </header>
 
-  <!-- SETUP -->
-  <div class="panel">
-    <h2>Migração</h2>
-    <div class="row">
-      <div class="col"><label>Source region</label><input id="src-region" value="us-east-1"></div>
-      <div class="arrow">▶</div>
-      <div class="col"><label>Target region</label><input id="tgt-region" value="sa-east-1"></div>
-      <div class="col"><label>Target account (cross-account, opcional)</label><input id="tgt-account" placeholder="123456789012"></div>
-      <div><button id="btn-start">Iniciar</button></div>
-    </div>
+  <div class="stepper">
+    <div class="step-pill active" data-step="1"><span class="n">1</span> Credenciais</div>
+    <div class="step-sep"></div>
+    <div class="step-pill" data-step="2"><span class="n">2</span> Migração</div>
+    <div class="step-sep"></div>
+    <div class="step-pill" data-step="3"><span class="n">3</span> Execução</div>
   </div>
 
-  <!-- PIPELINE + STREAMS -->
-  <div class="panel hidden" id="pipeline-panel">
-    <h2>Pipeline</h2>
-    <div class="pipeline">
-      <div class="stage" data-stage="discovery"><span class="dot"></span>Discovery</div>
-      <div class="stage" data-stage="graph"><span class="dot"></span>Graph</div>
-      <div class="stage" data-stage="assessment"><span class="dot"></span>Assessment</div>
-      <div class="stage" data-stage="cfn"><span class="dot"></span>Faithful CFN</div>
-    </div>
+  <main>
+    <!-- STEP 1: credenciais -->
+    <section class="card" id="card-creds">
+      <h2>Credenciais AWS</h2>
+      <p class="desc">Cole as credenciais temporárias (STS) das contas. Elas são gravadas nos MCPs do orquestrador — nunca saem deste servidor.</p>
 
-    <div class="streams">
-      <div class="stream">
-        <label>Narração do orquestrador</label>
-        <pre id="narration"></pre>
+      <div class="seg" id="acct-seg">
+        <button class="on" data-acct="source">Conta origem</button>
+        <button data-acct="target">Conta destino <span style="opacity:.5">(cross-account)</span></button>
       </div>
-      <div class="stream">
-        <label>Tool calls (o que ele executa)</label>
-        <pre id="toolcalls"></pre>
-      </div>
-    </div>
 
-    <div class="composer">
-      <input id="composer" placeholder="Mande uma mensagem ao orquestrador…">
-      <button id="btn-send" disabled>Enviar</button>
-    </div>
-    <div style="margin-top:12px">
-      <button id="btn-approve" class="secondary">✅ Pode executar a migração</button>
-      <button id="btn-cancel" class="secondary">⏹ Cancelar</button>
-    </div>
-  </div>
+      <div class="field">
+        <label>AWS_ACCESS_KEY_ID</label>
+        <input class="mono" id="ak" placeholder="ASIA..." autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label>AWS_SECRET_ACCESS_KEY</label>
+        <input class="mono" id="sk" type="password" placeholder="••••••••••••••••" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>AWS_SESSION_TOKEN</label>
+        <input class="mono" id="st" type="password" placeholder="token temporário" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>Região</label>
+        <input class="mono" id="rg" value="us-east-1">
+      </div>
+
+      <div class="status-line" id="creds-status"></div>
+
+      <div class="actions">
+        <button class="btn primary" id="btn-save-creds">Salvar e continuar →</button>
+      </div>
+      <p class="hint">Origem grava nos 6 MCPs agora. Destino fica guardado para o modo cross-account (em breve). Só a conta origem é obrigatória.</p>
+    </section>
+
+    <!-- STEP 2: parâmetros -->
+    <section class="card hidden" id="card-params">
+      <h2>Definir migração</h2>
+      <p class="desc">O orquestrador roda discovery → grafo → assessment → CloudFormation fiel automaticamente, e para antes de executar para você aprovar.</p>
+
+      <div class="grid2">
+        <div class="field"><label>Região origem</label><input class="mono" id="src-region" value="us-east-1"></div>
+        <div class="field"><label>Região destino</label><input class="mono" id="tgt-region" value="sa-east-1"></div>
+      </div>
+      <div class="field">
+        <label>Conta destino (opcional · cross-account)</label>
+        <input class="mono" id="tgt-account" placeholder="123456789012">
+      </div>
+      <div class="field">
+        <label>Instrução extra (opcional)</label>
+        <input id="extra" placeholder="ex: escopa no cluster tstsrv">
+      </div>
+
+      <div class="actions">
+        <button class="btn ghost" id="btn-back-1">← Voltar</button>
+        <button class="btn primary" id="btn-start">Iniciar migração</button>
+      </div>
+    </section>
+
+    <!-- STEP 3: execução -->
+    <section class="card wide hidden" id="card-exec">
+      <div class="pipe-head">
+        <h2>Pipeline</h2>
+        <div class="route"><b id="r-src">us-east-1</b> → <b id="r-tgt">sa-east-1</b></div>
+      </div>
+
+      <div class="stages">
+        <div class="stage" data-stage="discovery"><div class="top"><span class="dot"></span><span class="name">Discovery</span></div><div class="sub">recursos</div></div>
+        <div class="stage" data-stage="graph"><div class="top"><span class="dot"></span><span class="name">Grafo</span></div><div class="sub">dependências</div></div>
+        <div class="stage" data-stage="assessment"><div class="top"><span class="dot"></span><span class="name">Assessment</span></div><div class="sub">risco & regras</div></div>
+        <div class="stage" data-stage="cfn"><div class="top"><span class="dot"></span><span class="name">CFN fiel</span></div><div class="sub">template</div></div>
+      </div>
+
+      <div class="panes">
+        <div class="pane">
+          <h3>Narração do orquestrador</h3>
+          <div class="body"><div class="narration" id="narration"></div></div>
+        </div>
+        <div class="pane">
+          <h3>Tool calls</h3>
+          <div class="body" id="toolcalls"></div>
+        </div>
+      </div>
+
+      <div class="approval" id="approval">
+        <div class="txt">O orquestrador terminou o planejamento e está aguardando. Revise o <b>CFN fiel</b> na narração antes de executar.</div>
+        <button class="btn ok" id="btn-approve">✅ Pode executar</button>
+      </div>
+
+      <div class="composer">
+        <input id="composer" placeholder="Mensagem ao orquestrador…">
+        <button class="btn primary" id="btn-send" style="flex:none" disabled>Enviar</button>
+      </div>
+    </section>
+  </main>
 
   <script src="app.js"></script>
 </body>

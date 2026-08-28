@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { createMigrationRouter, type MigrationRouterDeps } from './migration.routes.js';
 import { createAcpSession, getAcpSession, stopAcpSession, type AcpEvent } from './acp-bridge.js';
+import { applyCredentials, validateCreds, type AwsCredentials } from './creds.js';
 import { logger } from '../infrastructure/aws/logger.js';
 
 /**
@@ -39,6 +40,15 @@ export function createApiServer(deps: MigrationRouterDeps): Server {
 
         if (path === '/health') return json(res, 200, { status: 'ok' });
 
+        // ── Credentials setup (writes AWS creds into the MCP env blocks) ───
+        if (path === '/api/creds' && req.method === 'POST') {
+          const body = JSON.parse((await readBody(req)) || '{}') as Partial<AwsCredentials>;
+          const err = validateCreds(body);
+          if (err) return json(res, 400, { error: err });
+          const status = await applyCredentials(body as AwsCredentials);
+          return json(res, 200, status);
+        }
+
         // ── ACP bridge routes ──────────────────────────────────────────────
         if (path === '/api/chat' && req.method === 'POST') {
           const body = JSON.parse((await readBody(req)) || '{}') as { sessionId?: string; message: string };
@@ -57,11 +67,10 @@ export function createApiServer(deps: MigrationRouterDeps): Server {
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
           });
-          const onEvent = (evt: AcpEvent): void => {
+          const unsubscribe = session.subscribe((evt: AcpEvent) => {
             res.write(`data: ${JSON.stringify(evt)}\n\n`);
-          };
-          session.on('event', onEvent);
-          req.on('close', () => session.off('event', onEvent));
+          });
+          req.on('close', () => unsubscribe());
           return;
         }
 

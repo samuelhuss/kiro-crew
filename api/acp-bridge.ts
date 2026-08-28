@@ -31,11 +31,31 @@ export class AcpSession extends EventEmitter {
   private buffer = '';
   private nextId = 1;
   private acpSessionId: string | null = null;
+  /** Replay buffer so an SSE subscriber that attaches late sees earlier events. */
+  private history: AcpEvent[] = [];
   readonly id: string;
 
   constructor() {
     super();
     this.id = randomUUID();
+  }
+
+  /** Emit an event to live listeners AND record it for replay. */
+  private push(evt: AcpEvent): void {
+    this.history.push(evt);
+    if (this.history.length > 5000) this.history.shift();
+    this.emit('event', evt);
+  }
+
+  /**
+   * Subscribe to events, replaying the backlog first. Returns an unsubscribe fn.
+   * This guarantees an SSE client attaching after the prompt was sent still
+   * receives ready + early message chunks in order.
+   */
+  subscribe(onEvent: (evt: AcpEvent) => void): () => void {
+    for (const evt of this.history) onEvent(evt);
+    this.on('event', onEvent);
+    return () => this.off('event', onEvent);
   }
 
   /** Start the acp child process and do the initialize + session/new handshake. */
@@ -51,7 +71,7 @@ export class AcpSession extends EventEmitter {
       logger.debug('acp stderr', { session: this.id, data: chunk.toString().slice(0, 200) });
     });
     this.proc.on('exit', (code) => {
-      this.emit('event', { type: 'error', text: `acp process exited (code ${code})` } as AcpEvent);
+      this.push({ type: 'error', text: `acp process exited (code ${code})` } as AcpEvent);
     });
 
     // 1. initialize (protocolVersion is a NUMBER for kiro-cli acp)
@@ -126,12 +146,12 @@ export class AcpSession extends EventEmitter {
       const result = msg['result'] as Record<string, unknown>;
       if (result['sessionId'] && !this.acpSessionId) {
         this.acpSessionId = String(result['sessionId']);
-        this.emit('event', { type: 'ready' } as AcpEvent);
+        this.push({ type: 'ready' } as AcpEvent);
         this.emit('session_ready');
         return;
       }
       if (result['stopReason']) {
-        this.emit('event', { type: 'turn_end', raw: result } as AcpEvent);
+        this.push({ type: 'turn_end', raw: result } as AcpEvent);
         return;
       }
     }
@@ -144,16 +164,16 @@ export class AcpSession extends EventEmitter {
 
       if (kind === 'agent_message_chunk') {
         const content = update['content'] as { text?: string } | undefined;
-        this.emit('event', { type: 'message', text: content?.text ?? '', raw: update } as AcpEvent);
+        this.push({ type: 'message', text: content?.text ?? '', raw: update } as AcpEvent);
       } else if (kind === 'tool_call') {
-        this.emit('event', {
+        this.push({
           type: 'tool_call',
           toolName: String(update['title'] ?? update['toolName'] ?? update['kind'] ?? 'tool'),
           toolStatus: String(update['status'] ?? 'started'),
           raw: update,
         } as AcpEvent);
       } else if (kind === 'tool_call_update') {
-        this.emit('event', {
+        this.push({
           type: 'tool_update',
           toolName: String(update['title'] ?? update['toolName'] ?? ''),
           toolStatus: String(update['status'] ?? ''),
