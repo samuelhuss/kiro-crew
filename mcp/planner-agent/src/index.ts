@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { generateMigrationPlan } from '../../../domain/migration/planner.js';
 import { generateCfnTemplates } from '../../../domain/migration/cfn-generator.js';
 import { runFullValidation } from '../../../domain/migration/validator.js';
-import { generateFaithfulTemplate } from '../../../domain/migration/iac-generator.js';
+import { generateFaithfulTemplate, adaptForTarget } from '../../../domain/migration/iac-generator.js';
 import { buildMigrationManifest, renderManifestMarkdown } from '../../../domain/migration/manifest.js';
 import type { ResourceToGenerate } from '../../../domain/migration/iac-generator.js';
 import type { MigrationManifest } from '../../../domain/migration/manifest.js';
@@ -159,6 +159,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           outputPath: { type: 'string', description: 'Where to write the .yaml (default docs/cfn/faithful.yaml)' },
         },
         required: ['resources'],
+      },
+    },
+    {
+      name: 'adapt_template_for_target',
+      description:
+        'Adapt a faithful CFN template for the TARGET region/account: turns hardcoded source IDs (VpcId, SubnetId, SG, AMI, snapshot) into CloudFormation Parameters, removes source-specific private IPs. Returns the adapted YAML + the list of parameters that must be supplied at deploy time (wired from the networking stack outputs and the copied AMI/snapshot). Use this right before deploying the compute phase.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          templatePath: { type: 'string', description: 'Path to the faithful .yaml to adapt' },
+          targetRegion: { type: 'string' },
+          targetAccountId: { type: 'string' },
+          outputPath: { type: 'string', description: 'Where to write the adapted .yaml (default docs/cfn/adapted.yaml)' },
+        },
+        required: ['templatePath', 'targetRegion'],
       },
     },
   ],
@@ -367,6 +382,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           unresolvedResources: result.unresolvedResources,
           warnings: result.warnings,
           note: 'Faithful template from real resource config. Adapt IDs/ARNs for target region/account before deploying.',
+        });
+      }
+
+      case 'adapt_template_for_target': {
+        const input = z.object({
+          templatePath: z.string(),
+          targetRegion: z.string(),
+          targetAccountId: z.string().default(''),
+          outputPath: z.string().default('docs/cfn/adapted.yaml'),
+        }).parse(args);
+
+        const { readFile } = await import('node:fs/promises');
+        const templateBody = await readFile(input.templatePath, 'utf8');
+        const adapted = adaptForTarget(templateBody, {
+          targetRegion: input.targetRegion,
+          targetAccountId: input.targetAccountId,
+        });
+
+        await mkdir(dirname(input.outputPath), { recursive: true });
+        await writeFile(input.outputPath, adapted.yaml, 'utf8');
+
+        return text({
+          adaptedPath: input.outputPath,
+          requiredParameters: adapted.requiredParameters,
+          removedAttributes: adapted.removedAttributes,
+          note: 'Supply the required parameters at deploy time: wire TargetVpcId/TargetSubnetId/TargetSecurityGroupId from the networking stack, TargetImageId/TargetSnapshotId from the copied AMI/snapshot.',
         });
       }
 

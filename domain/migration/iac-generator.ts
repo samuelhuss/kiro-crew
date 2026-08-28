@@ -195,3 +195,81 @@ async function cleanup(client: CloudFormationClient, templateName: string): Prom
 export function isIacGeneratorSupported(resourceType: ResourceType): boolean {
   return resourceType in RESOURCE_IDENTIFIER_KEY;
 }
+
+/**
+ * Adapt a faithful template for the TARGET region/account.
+ *
+ * The IaC Generator template hardcodes source-region physical IDs (VpcId,
+ * SubnetId, SecurityGroup IDs, ImageId, private IPs). Those do not exist in the
+ * target. This turns them into CloudFormation Parameters so the execution phase
+ * can wire in the new IDs (from the networking stack) and the copied AMI/snapshot.
+ *
+ * Returns the adapted YAML plus the list of parameters that must be supplied at
+ * deploy time.
+ */
+export interface AdaptedTemplate {
+  yaml: string;
+  requiredParameters: Array<{ name: string; description: string; sourceValue: string }>;
+  removedAttributes: string[];
+}
+
+export function adaptForTarget(
+  templateBody: string,
+  opts: { targetRegion: string; targetAccountId?: string }
+): AdaptedTemplate {
+  const requiredParameters: AdaptedTemplate['requiredParameters'] = [];
+  const removedAttributes: string[] = [];
+  let yaml = templateBody;
+
+  // Tag the template with the target destination for traceability
+  const dest = opts.targetAccountId
+    ? `${opts.targetRegion} (account ${opts.targetAccountId})`
+    : opts.targetRegion;
+  yaml = `# Adapted for target: ${dest}\n${yaml}`;
+
+  // Patterns of source-region/account-specific values that must be parameterized.
+  const patterns: Array<{ re: RegExp; param: string; desc: string }> = [
+    { re: /vpc-[0-9a-f]{8,}/g, param: 'TargetVpcId', desc: 'VPC ID in the target region (from the networking stack)' },
+    { re: /subnet-[0-9a-f]{8,}/g, param: 'TargetSubnetId', desc: 'Subnet ID in the target region' },
+    { re: /sg-[0-9a-f]{8,}/g, param: 'TargetSecurityGroupId', desc: 'Security Group ID in the target region' },
+    { re: /ami-[0-9a-f]{8,}/g, param: 'TargetImageId', desc: 'AMI ID copied to the target region' },
+    { re: /snap-[0-9a-f]{8,}/g, param: 'TargetSnapshotId', desc: 'Snapshot ID copied to the target region' },
+  ];
+
+  for (const { re, param, desc } of patterns) {
+    const matches = [...new Set(yaml.match(re) ?? [])];
+    if (matches.length === 1) {
+      // Single value → one parameter, replace with !Ref
+      requiredParameters.push({ name: param, description: desc, sourceValue: matches[0]! });
+      yaml = yaml.replace(re, `!Ref ${param}`);
+    } else if (matches.length > 1) {
+      // Multiple distinct values → parameterize each with a suffix
+      matches.forEach((val, i) => {
+        const p = `${param}${i + 1}`;
+        requiredParameters.push({ name: p, description: `${desc} (${val})`, sourceValue: val });
+        yaml = yaml.split(val).join(`!Ref ${p}`);
+      });
+    }
+  }
+
+  // Remove hardcoded private IPs (target subnet has a different CIDR)
+  yaml = yaml.replace(/^\s*PrivateIpAddress:.*$/gm, (m) => {
+    removedAttributes.push(m.trim());
+    return '';
+  });
+
+  // Inject the Parameters block if we added any
+  if (requiredParameters.length > 0) {
+    const paramBlock = requiredParameters
+      .map(p => `  ${p.name}:\n    Type: "String"\n    Description: "${p.description}"`)
+      .join('\n');
+    if (/^Parameters:/m.test(yaml)) {
+      yaml = yaml.replace(/^Parameters:\s*$/m, `Parameters:\n${paramBlock}`);
+    } else {
+      // Insert Parameters after the AWSToolsMetrics/Metadata or at the top
+      yaml = yaml.replace(/^(Resources:)/m, `Parameters:\n${paramBlock}\n$1`);
+    }
+  }
+
+  return { yaml, requiredParameters, removedAttributes };
+}
