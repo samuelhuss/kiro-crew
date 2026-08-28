@@ -1,106 +1,112 @@
-# Migration Console — Design & Structure
+# Migration Console — Design (ACP Bridge)
 
-A minimal single-page frontend to run and visualize the full migration pipeline
-(cross-region AND cross-account), served by the existing `node:http` API.
+A minimal visual frontend that is the **face of the orchestrator**, NOT an
+alternative to it. The frontend sends a message to the `aws-migration-orchestrator`
+agent and streams back what the agent does (its messages + tool calls), rendering
+the pipeline visually. All migration logic stays in the orchestrator.
 
-## Goals
-
-- See the WHOLE process visually: source → target, resources, pipeline stages, execution progress
-- Cross-account support (Option B: separate STS credentials for source and target)
-- Preview the faithful CloudFormation before deploying
-- Real-time execution progress (SSE)
-- No web framework — vanilla HTML/JS + the existing node:http server
-
-## Architecture
+## Key principle
 
 ```
-Browser (dashboard Browser panel @ 127.0.0.1:PORT)
-   │  static index.html + fetch/SSE
-   ▼
-api/server.ts  (node:http, extended)
-   ├── GET  /                         → serve public/index.html
-   ├── GET  /health                   → { status: ok }
-   │
-   ├── POST /api/discover             → scan_region + build_graph  (source creds)
-   │        body: { sourceRegion, sourceCreds }
-   │        resp: { sessionId, resourceCount, clusters[] }
-   │
-   ├── GET  /api/clusters/:sessionId  → application clusters (connected components)
-   │
-   ├── POST /api/plan                 → assessment + faithful CFN + data plan
-   │        body: { sessionId, scopedResourceIds[], targetRegion, targetAccountId?, isCrossAccount }
-   │        resp: { planId, phases[], manifest, cfnTemplates[], migrationCost }
-   │
-   ├── GET  /api/plan/:planId         → full plan detail (CFN YAML, manifest md)
-   │
-   ├── POST /api/execute              → START execution (returns immediately)
-   │        body: { planId, targetCreds, approved: true }
-   │        resp: { executionId }
-   │
-   └── GET  /api/execute/:executionId/stream  → SSE stream of phase progress
-            events: phase_start, phase_progress, phase_complete, phase_failed, done
+Frontend  →  ACP bridge  →  aws-migration-orchestrator (the brain, 6 MCPs)
+   ▲                              │
+   └──── streams agent output ────┘
 ```
 
-## Frontend layout (public/index.html)
+The bridge has ZERO migration logic. It only:
+1. Spawns `kiro-cli acp --agent aws-migration-orchestrator --trust-all-tools`
+2. Speaks JSON-RPC (ACP) to it: initialize → session/new → session/prompt
+3. Relays the agent's `session/notification` events (AgentMessageChunk, ToolCall,
+   ToolCallUpdate, TurnEnd) to the browser via SSE
+4. Sends the user's approval/next message back as another session/prompt
 
-Single file, three panels:
+## ACP protocol (from `kiro-cli acp`)
 
-1. **Setup** — source (region + creds) / target (region + account + creds) / "Discover"
-2. **Plan** — resource cluster picker, pipeline stage tracker (Discovery→Graph→Assessment→CFN),
-   cost badge, "View CloudFormation" / "View Manifest" buttons, "Plan" button
-3. **Execute** — approval gate (shows CFN), then phase-by-phase progress bars fed by SSE,
-   with Execute / Rollback buttons
+Transport: JSON-RPC 2.0 over stdin/stdout. Methods used:
+- `initialize` — capabilities handshake
+- `session/new` — create a session bound to the orchestrator agent
+- `session/prompt` — send the user's message ("migre tstsrv us-east-1 → sa-east-1")
+- `session/cancel` — cancel current turn
 
-Styling: minimal, dark-mode aware (CSS custom properties), no external CDN needed
-(inline the small amount of CSS/JS). Uses fetch + EventSource only.
+Agent → client notifications (`session/notification`):
+- `AgentMessageChunk` — streaming text from the orchestrator (narration)
+- `ToolCall` — a tool invocation (scan_region, build_graph, generate_faithful_cfn, deploy…)
+- `ToolCallUpdate` — progress of a running tool
+- `TurnEnd` — the agent finished its turn (e.g. reached the approval gate)
 
-## Cross-account specifics (Option B — separate credentials)
+CLI invocation:
+```
+kiro-cli acp --agent aws-migration-orchestrator --trust-all-tools
+```
+(--trust-all-tools so the bridge does not stall on permission prompts; the
+approval gate is enforced by the orchestrator's prompt, not by tool prompts.)
 
-- The Setup panel has TWO credential blocks: SOURCE and TARGET (each: access key,
-  secret, session token, region).
-- Backend keeps them per-session (in memory only, never written to disk).
-- Data phase: source creds create/share the AMI/snapshot; target creds copy it in.
-- Compute phase: `aws cloudformation deploy` runs with TARGET creds.
-- AMI/snapshot SHARE step added before COPY (modify-image-attribute /
-  modify-snapshot-attribute --launch-permission / --create-volume-permission with the
-  target account ID).
+## Mapping ACP events → visual pipeline
 
-## New backend modules to build (later, when memory frees)
+The frontend maps the orchestrator's tool calls to pipeline stages:
 
-| File | Responsibility |
-|------|----------------|
-| `api/routes/discover.ts` | scan + graph, return clusters |
-| `api/routes/plan.ts` | assessment + faithful CFN + data plan + manifest |
-| `api/routes/execute.ts` | orchestrate execution phases, emit SSE |
-| `api/execution/executor.ts` | run AWS CLI per phase (deploy, create-image, copy, share) |
-| `api/execution/cross-account.ts` | AMI/snapshot share + dual-credential handling |
-| `public/index.html` | the single-page console |
-| `public/app.js` | fetch/SSE client logic |
-| `public/style.css` | minimal styling |
+| Tool call (from ACP ToolCall) | Visual stage |
+|-------------------------------|--------------|
+| `scan_region` | Discovery |
+| `build_graph` | Graph |
+| `analyze_resource_migration` | Assessment |
+| `generate_faithful_cfn` | Faithful CFN |
+| `aws cloudformation deploy` (shell) | Execution: networking/compute |
+| `aws ec2 create-image` / `copy-image` (shell) | Execution: data |
+| TurnEnd after CFN | → show approval gate |
 
-## Security notes
+AgentMessageChunk text streams into a narration log so the user "só quer entender
+o que está acontecendo".
 
-- Credentials live ONLY in server memory for the session; never persisted, never logged.
-- Server binds 127.0.0.1 only.
-- SOURCE is never modified (create-image/snapshot are non-destructive; share is a permission grant).
-- Execution requires explicit `approved: true` in the POST body.
-- Rollback = delete target stacks.
-
-## Data-migration cross-account sequence (per stateful resource)
+## API bridge (node:http)
 
 ```
-EC2:
-  [source creds] create-image → wait available
-  [source creds] modify-image-attribute --launch-permission Add=Account:<target>
-  [source creds] (for each snapshot in the AMI) modify-snapshot-attribute --create-volume-permission Add=<target>
-  [target creds] copy-image --source-region <src> (now visible to target)
-  [target creds] deploy compute stack referencing the copied AMI
-
-EBS:
-  [source creds] create-snapshot → modify-snapshot-attribute (share with target)
-  [target creds] copy-snapshot
-
-RDS:
-  [source creds] create-db-snapshot → modify-db-snapshot-attribute (share)
-  [target creds] copy-db-snapshot → restore
+GET  /                          → serve public/index.html
+GET  /health                    → { status: ok }
+POST /api/chat                  → start/continue an orchestrator session
+     body: { sessionId?, message }
+     resp: { sessionId }        (the turn streams over SSE)
+GET  /api/chat/:sessionId/stream → SSE of ACP events (mapped for the UI)
+POST /api/chat/:sessionId/cancel → session/cancel
 ```
+
+One `kiro-cli acp` child process per browser session, kept alive for the
+conversation. The bridge parses its stdout JSON-RPC and re-emits SSE.
+
+## Credentials (cross-account, Option B)
+
+Credentials are NOT handled by the bridge or frontend. They live where they
+already do — in the orchestrator's agent config (`~/.kiro/agents/aws-migration-orchestrator.json`),
+which the MCP servers read. For cross-account, the target credentials are added
+to the relevant MCP env (same pattern as the source). The frontend just tells
+the orchestrator "migre para a conta B (<id>) região sa-east-1" in natural
+language; the orchestrator uses the configured target credentials.
+
+(If per-session credentials are needed later, the bridge could inject them via a
+session/prompt preamble — but that is a future enhancement, not the MVP.)
+
+## Files
+
+| File | Role |
+|------|------|
+| `api/acp-bridge.ts` | Spawn kiro-cli acp, JSON-RPC framing, SSE relay |
+| `api/server.ts` | (extend) serve static + /api/chat routes |
+| `public/index.html` | Console UI (setup, pipeline stages, narration, approval, execution) |
+| `public/app.js` | fetch /api/chat + EventSource; map ACP events → stages |
+| `public/style.css` | (inline in index.html for MVP) |
+
+## Security
+
+- Bridge binds 127.0.0.1 only.
+- No credentials in the frontend or bridge — they stay in the agent config.
+- The orchestrator's own prompt enforces the approval gate before any execution.
+- `--trust-all-tools` is safe here because the destructive gate is the human
+  approval the orchestrator asks for, and the source is never modified.
+
+## Environment caveat
+
+Earlier we found the gateway could not spawn custom MCPs in the dashboard chat on
+this host. `kiro-cli acp` runs the agent as a direct child process (not through
+the gateway's MCP spawner), so the bridge must be validated to confirm the 6 MCPs
+come up under acp on this host. If they do not, the bridge still works from the
+user's own environment where the MCPs spawn correctly.
