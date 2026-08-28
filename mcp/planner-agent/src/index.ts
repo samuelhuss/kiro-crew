@@ -8,9 +8,15 @@ import { z } from 'zod';
 import { generateMigrationPlan } from '../../../domain/migration/planner.js';
 import { generateCfnTemplates } from '../../../domain/migration/cfn-generator.js';
 import { runFullValidation } from '../../../domain/migration/validator.js';
+import { generateFaithfulTemplate } from '../../../domain/migration/iac-generator.js';
+import { buildMigrationManifest, renderManifestMarkdown } from '../../../domain/migration/manifest.js';
+import type { ResourceToGenerate } from '../../../domain/migration/iac-generator.js';
+import type { MigrationManifest } from '../../../domain/migration/manifest.js';
 import { createGraphRepository } from '../../../repositories/graph/graph-repository.factory.js';
 import { MigrationAnalysisService } from '../../../domain/migration/service.js';
 import { InMemoryAssessmentRepository } from '../../../repositories/migration/in-memory-assessment.repository.js';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { logger } from '../../../infrastructure/aws/logger.js';
 import type { MigrationRequirements } from '../../../domain/migration/plan.js';
 import type { MigrationPlan } from '../../../domain/migration/plan.js';
@@ -32,6 +38,8 @@ const migrationService = new MigrationAnalysisService(graphRepo, assessmentRepo)
 
 // Keep the last generated plan in memory for multi-step interactions
 let lastPlan: MigrationPlan | null = null;
+let lastManifest: MigrationManifest | null = null;
+const REGION = process.env['AWS_REGION'] ?? 'us-east-1';
 
 const text = (value: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
@@ -110,6 +118,48 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: 'get_plan_summary',
       description: 'Get a human-readable summary of the current migration plan (phases, actions, risk, estimated time).',
       inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'generate_migration_manifest',
+      description:
+        'Generate the Migration Manifest — a clear, human-readable planning document. For EVERY resource: what it is, what will be created, fidelity level, what changes, data-migration steps (AMI/snapshot), manual actions, blockers, and migration cost. Run this FIRST for a clear plan before generating CFN. Writes a markdown file.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sourceRegion: { type: 'string' },
+          targetRegion: { type: 'string' },
+          targetAccountId: { type: 'string', description: 'Target account ID (cross-account)' },
+          isCrossAccount: { type: 'boolean' },
+          scopedResourceIds: { type: 'array', items: { type: 'string' }, description: 'Subset to migrate (empty = all)' },
+          outputPath: { type: 'string', description: 'Where to write the manifest markdown (default docs/migration-manifest.md)' },
+        },
+        required: ['sourceRegion', 'targetRegion'],
+      },
+    },
+    {
+      name: 'generate_faithful_cfn',
+      description:
+        'Generate FAITHFUL CloudFormation using the AWS IaC Generator. Reads the REAL config of the given resources (via AWS Config) and produces an accurate template — SG rules, UserData, all properties. This is the reliable path (no placeholders). Requires AWS credentials. Writes the .yaml file.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          resources: {
+            type: 'array',
+            description: 'Resources to generate (each {resourceType, physicalId})',
+            items: {
+              type: 'object',
+              properties: {
+                resourceType: { type: 'string' },
+                physicalId: { type: 'string' },
+              },
+              required: ['resourceType', 'physicalId'],
+            },
+          },
+          region: { type: 'string', description: 'Region where the resources live' },
+          outputPath: { type: 'string', description: 'Where to write the .yaml (default docs/cfn/faithful.yaml)' },
+        },
+        required: ['resources'],
+      },
     },
   ],
 }));
@@ -242,6 +292,82 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ].join('\n');
 
         return { content: [{ type: 'text' as const, text: summary }] };
+      }
+
+      case 'generate_migration_manifest': {
+        const input = z.object({
+          sourceRegion: z.string().min(1),
+          targetRegion: z.string().min(1),
+          targetAccountId: z.string().default(''),
+          isCrossAccount: z.boolean().default(false),
+          scopedResourceIds: z.array(z.string()).default([]),
+          outputPath: z.string().default('docs/migration-manifest.md'),
+        }).parse(args);
+
+        const assessment = await migrationService.analyze(input.sourceRegion, input.targetRegion);
+        const graph = await graphRepo.getGraph();
+
+        lastManifest = buildMigrationManifest(assessment, graph.nodes, {
+          targetAccountId: input.targetAccountId,
+          isCrossAccount: input.isCrossAccount,
+          scopedResourceIds: input.scopedResourceIds,
+        });
+
+        const md = renderManifestMarkdown(lastManifest);
+        await mkdir(dirname(input.outputPath), { recursive: true });
+        await writeFile(input.outputPath, md, 'utf8');
+
+        return text({
+          manifestPath: input.outputPath,
+          summary: lastManifest.summary,
+          migrationCost: lastManifest.migrationCost,
+          orphanCount: lastManifest.orphanCount,
+          entries: lastManifest.entries.map(e => ({
+            resourceId: e.resourceId,
+            name: e.name,
+            fidelity: e.fidelity,
+            hasDataMigration: e.dataMigration !== null,
+            blockers: e.blockers.length,
+            manualActions: e.manualActions.length,
+          })),
+        });
+      }
+
+      case 'generate_faithful_cfn': {
+        const input = z.object({
+          resources: z.array(z.object({
+            resourceType: z.string(),
+            physicalId: z.string(),
+          })).min(1),
+          region: z.string().default(REGION),
+          outputPath: z.string().default('docs/cfn/faithful.yaml'),
+        }).parse(args);
+
+        const resources = input.resources as ResourceToGenerate[];
+        const result = await generateFaithfulTemplate(resources, { region: input.region });
+
+        if (result.status === 'FAILED') {
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify({
+              status: result.status,
+              warnings: result.warnings,
+              unresolvedResources: result.unresolvedResources,
+            }, null, 2) }],
+            isError: true,
+          };
+        }
+
+        await mkdir(dirname(input.outputPath), { recursive: true });
+        await writeFile(input.outputPath, result.templateBody, 'utf8');
+
+        return text({
+          status: result.status,
+          templatePath: input.outputPath,
+          templateSizeBytes: result.templateBody.length,
+          unresolvedResources: result.unresolvedResources,
+          warnings: result.warnings,
+          note: 'Faithful template from real resource config. Adapt IDs/ARNs for target region/account before deploying.',
+        });
       }
 
       default:

@@ -22,6 +22,7 @@
     "test:unit-core": "node --experimental-vm-modules --max-old-space-size=2048 node_modules/.bin/jest --runInBand --workerIdleMemoryLimit=512MB --testPathPattern=\"tests/unit\" --testPathIgnorePatterns=\"kuzu\""
   },
   "dependencies": {
+    "@aws-sdk/client-cloudformation": "^3.654.0",
     "@aws-sdk/client-cloudfront": "^3.654.0",
     "@aws-sdk/client-cloudwatch-logs": "^3.654.0",
     "@aws-sdk/client-dynamodb": "^3.654.0",
