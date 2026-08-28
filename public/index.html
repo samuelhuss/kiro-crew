@@ -3,33 +3,35 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AWS Migration Console</title>
+  <title>Claro Empresas · Migration Console</title>
   <link rel="icon" href="data:,">
   <style>
     :root {
-      --bg: #0b0e14;
-      --bg-soft: #10141d;
-      --surface: #141925;
-      --surface-2: #1b2130;
-      --border: #232b3d;
-      --border-soft: #1a2130;
-      --text: #e6ebf4;
-      --muted: #8792a8;
-      --faint: #566072;
-      --accent: #5b9dff;
-      --accent-soft: #2a3f63;
-      --ok: #3ddc97;
-      --run: #5b9dff;
-      --err: #ff6b6b;
+      /* Claro Empresas — tema claro, vermelho Claro */
+      --bg: #f4f5f7;
+      --bg-soft: #ffffff;
+      --surface: #ffffff;
+      --surface-2: #f7f8fa;
+      --border: #e2e5ea;
+      --border-soft: #edeef1;
+      --text: #1a1a1a;
+      --muted: #5c6270;
+      --faint: #9aa0ab;
+      --accent: #e60000;         /* vermelho Claro */
+      --accent-dark: #c00000;
+      --accent-soft: #fde7e7;
+      --ok: #1a9c5b;
+      --run: #e60000;
+      --err: #d62828;
       --radius: 14px;
-      --shadow: 0 8px 40px rgba(0,0,0,.35);
+      --shadow: 0 6px 30px rgba(20,20,20,.08);
       --mono: "SF Mono", "JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
       --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; }
     body {
-      background: radial-gradient(1200px 600px at 50% -10%, #131a28 0%, var(--bg) 55%);
+      background: var(--bg);
       color: var(--text);
       font: 15px/1.6 var(--sans);
       -webkit-font-smoothing: antialiased;
@@ -40,15 +42,18 @@
     /* ── Top bar ─────────────────────────────────────────────── */
     header {
       display: flex; align-items: center; gap: 12px;
-      padding: 18px 28px;
-      border-bottom: 1px solid var(--border-soft);
+      padding: 16px 28px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
     }
-    .logo { width: 26px; height: 26px; border-radius: 7px;
-      background: linear-gradient(135deg, var(--accent), #7c5bff);
-      display: grid; place-items: center; font-weight: 700; font-size: 14px; color: #fff; }
-    header h1 { font-size: 15px; font-weight: 600; letter-spacing: .2px; }
-    header .tag { margin-left: auto; font-size: 12px; color: var(--faint);
-      border: 1px solid var(--border); border-radius: 20px; padding: 4px 12px; }
+    .logo {
+      font-weight: 800; font-size: 20px; color: var(--accent);
+      letter-spacing: -.5px; font-style: italic;
+    }
+    header h1 { font-size: 14px; font-weight: 600; letter-spacing: .2px; color: var(--muted);
+      padding-left: 12px; margin-left: 4px; border-left: 1px solid var(--border); }
+    header .tag { margin-left: auto; font-size: 12px; color: var(--accent);
+      background: var(--accent-soft); border-radius: 20px; padding: 4px 12px; font-weight: 600; }
 
     /* ── Stepper ─────────────────────────────────────────────── */
     .stepper { display: flex; justify-content: center; gap: 8px; padding: 22px 0 8px; }
@@ -57,8 +62,8 @@
     .step-pill .n { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
       border: 1px solid var(--border); font-size: 12px; transition: all .3s ease; }
     .step-pill.active { color: var(--text); }
-    .step-pill.active .n { border-color: var(--accent); background: var(--accent-soft); color: #fff; }
-    .step-pill.done .n { border-color: var(--ok); background: rgba(61,220,151,.12); color: var(--ok); }
+    .step-pill.active .n { border-color: var(--accent); background: var(--accent); color: #fff; }
+    .step-pill.done .n { border-color: var(--ok); background: rgba(26,156,91,.12); color: var(--ok); }
     .step-sep { width: 26px; height: 1px; background: var(--border); align-self: center; }
 
     /* ── Main / cards ────────────────────────────────────────── */
@@ -66,7 +71,7 @@
       padding: 20px 20px 60px; }
     .card {
       width: 100%; max-width: 560px;
-      background: linear-gradient(180deg, var(--surface) 0%, var(--bg-soft) 100%);
+      background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       box-shadow: var(--shadow);
@@ -82,41 +87,43 @@
     .field { margin-bottom: 16px; }
     .field label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 7px; font-weight: 500; }
     input, textarea {
-      width: 100%; background: var(--bg); border: 1px solid var(--border);
+      width: 100%; background: var(--surface-2); border: 1px solid var(--border);
       border-radius: 10px; padding: 11px 13px; color: var(--text); font: inherit; font-size: 14px;
       transition: border-color .2s ease, box-shadow .2s ease;
     }
     input::placeholder { color: var(--faint); }
     input:focus, textarea:focus { outline: none; border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(91,157,255,.12); }
+      box-shadow: 0 0 0 3px rgba(230,0,0,.12); }
     input.mono { font-family: var(--mono); font-size: 13px; letter-spacing: .3px; }
     .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 
     /* segmented tabs (source/target) */
-    .seg { display: flex; background: var(--bg); border: 1px solid var(--border);
+    .seg { display: flex; background: var(--surface-2); border: 1px solid var(--border);
       border-radius: 10px; padding: 3px; margin-bottom: 20px; }
     .seg button { flex: 1; background: transparent; border: none; color: var(--muted);
       padding: 8px; border-radius: 7px; font: inherit; font-size: 13px; cursor: pointer;
       transition: all .25s ease; }
-    .seg button.on { background: var(--surface-2); color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+    .seg button.on { background: var(--surface); color: var(--accent); font-weight: 600;
+      box-shadow: 0 1px 4px rgba(20,20,20,.1); }
 
     /* buttons */
     .actions { display: flex; gap: 10px; margin-top: 26px; }
     button.btn { border: none; border-radius: 10px; padding: 12px 20px; font: inherit; font-weight: 600;
       font-size: 14px; cursor: pointer; transition: transform .12s ease, filter .2s ease, background .2s ease; }
     button.btn:active { transform: translateY(1px) scale(.99); }
-    .btn.primary { background: linear-gradient(135deg, var(--accent), #4a86f0); color: #fff; flex: 1; }
-    .btn.primary:hover { filter: brightness(1.08); }
+    .btn.primary { background: var(--accent); color: #fff; flex: 1; }
+    .btn.primary:hover { background: var(--accent-dark); }
     .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
-    .btn.ghost:hover { border-color: var(--accent); color: var(--text); }
-    .btn.ok { background: linear-gradient(135deg, var(--ok), #2fc085); color: #04231a; }
+    .btn.ghost:hover { border-color: var(--accent); color: var(--accent); }
+    .btn.ok { background: var(--ok); color: #fff; }
+    .btn.ok:hover { filter: brightness(1.08); }
     .btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
 
     .hint { font-size: 12px; color: var(--faint); margin-top: 14px; line-height: 1.5; }
     .status-line { font-size: 12.5px; margin-top: 14px; padding: 10px 12px; border-radius: 9px;
-      background: rgba(61,220,151,.08); border: 1px solid rgba(61,220,151,.25); color: var(--ok);
+      background: rgba(26,156,91,.1); border: 1px solid rgba(26,156,91,.3); color: var(--ok);
       display: none; }
-    .status-line.err { background: rgba(255,107,107,.08); border-color: rgba(255,107,107,.3); color: var(--err); }
+    .status-line.err { background: rgba(214,40,40,.08); border-color: rgba(214,40,40,.3); color: var(--err); }
     .status-line.show { display: block; animation: rise .3s ease both; }
 
     /* ── Pipeline (step 3) ───────────────────────────────────── */
@@ -126,7 +133,7 @@
     .pipe-head .route b { color: var(--accent); }
 
     .stages { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 22px; }
-    .stage { position: relative; background: var(--bg); border: 1px solid var(--border);
+    .stage { position: relative; background: var(--surface-2); border: 1px solid var(--border);
       border-radius: 11px; padding: 14px; overflow: hidden; transition: border-color .3s ease; }
     .stage .top { display: flex; align-items: center; gap: 8px; }
     .stage .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none;
@@ -134,9 +141,9 @@
     .stage .name { font-size: 12.5px; font-weight: 600; }
     .stage .sub { font-size: 11px; color: var(--faint); margin-top: 4px; }
     .stage.active { border-color: var(--accent); }
-    .stage.active .dot { background: var(--run); box-shadow: 0 0 0 4px rgba(91,157,255,.18); animation: pulse 1.4s infinite; }
-    .stage.done { border-color: rgba(61,220,151,.4); }
-    .stage.done .dot { background: var(--ok); box-shadow: 0 0 0 4px rgba(61,220,151,.14); }
+    .stage.active .dot { background: var(--run); box-shadow: 0 0 0 4px rgba(230,0,0,.15); animation: pulse 1.4s infinite; }
+    .stage.done { border-color: rgba(26,156,91,.4); }
+    .stage.done .dot { background: var(--ok); box-shadow: 0 0 0 4px rgba(26,156,91,.14); }
     .stage.active::after { content:""; position:absolute; left:0; bottom:0; height:2px; width:100%;
       background: linear-gradient(90deg, transparent, var(--accent), transparent);
       animation: sweep 1.6s linear infinite; }
@@ -144,7 +151,7 @@
     @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
 
     .panes { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
-    .pane { background: var(--bg); border: 1px solid var(--border); border-radius: 11px;
+    .pane { background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px;
       display: flex; flex-direction: column; min-height: 340px; }
     .pane h3 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint);
       padding: 12px 14px; border-bottom: 1px solid var(--border-soft); }
@@ -171,8 +178,8 @@
 
     /* approval banner */
     .approval { margin-top: 16px; padding: 16px; border-radius: 11px; display: none;
-      background: linear-gradient(135deg, rgba(91,157,255,.12), rgba(124,91,255,.08));
-      border: 1px solid var(--accent-soft); align-items: center; gap: 14px; animation: rise .4s ease both; }
+      background: var(--accent-soft);
+      border: 1px solid rgba(230,0,0,.25); align-items: center; gap: 14px; animation: rise .4s ease both; }
     .approval.show { display: flex; }
     .approval .txt { flex: 1; font-size: 13.5px; }
     .approval .txt b { color: var(--accent); }
@@ -185,8 +192,8 @@
 </head>
 <body>
   <header>
-    <div class="logo">▲</div>
-    <h1>AWS Migration Console</h1>
+    <div class="logo">claro</div>
+    <h1>Migration Console · Empresas</h1>
     <div class="tag">orquestrador ao vivo</div>
   </header>
 
