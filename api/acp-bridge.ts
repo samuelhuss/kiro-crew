@@ -54,14 +54,18 @@ export class AcpSession extends EventEmitter {
       this.emit('event', { type: 'error', text: `acp process exited (code ${code})` } as AcpEvent);
     });
 
-    // 1. initialize
+    // 1. initialize (protocolVersion is a NUMBER for kiro-cli acp)
     this.send('initialize', {
-      protocolVersion: '2025-01-01',
+      protocolVersion: 1,
       clientCapabilities: {},
     });
 
-    // 2. session/new (bind to the orchestrator)
-    this.send('session/new', { agent: ORCHESTRATOR_AGENT });
+    // 2. session/new — the --agent flag binds the orchestrator; params need
+    //    cwd + mcpServers (empty: the agent's own config supplies its 6 MCPs).
+    this.send('session/new', {
+      cwd: process.env['ORCHESTRATOR_CWD'] ?? process.cwd(),
+      mcpServers: [],
+    });
   }
 
   /** Send a user message (prompt) to the orchestrator. */
@@ -116,7 +120,8 @@ export class AcpSession extends EventEmitter {
   }
 
   private handleMessage(msg: Record<string, unknown>): void {
-    // Response to session/new → capture the ACP session id
+    // Response to session/new → capture the ACP session id.
+    // Response to session/prompt → { result: { stopReason } } signals turn end.
     if (msg['result'] && typeof msg['result'] === 'object') {
       const result = msg['result'] as Record<string, unknown>;
       if (result['sessionId'] && !this.acpSessionId) {
@@ -125,33 +130,35 @@ export class AcpSession extends EventEmitter {
         this.emit('session_ready');
         return;
       }
+      if (result['stopReason']) {
+        this.emit('event', { type: 'turn_end', raw: result } as AcpEvent);
+        return;
+      }
     }
 
-    // Notifications from the agent
-    if (msg['method'] === 'session/notification') {
+    // Notifications from the agent: method === 'session/update'
+    if (msg['method'] === 'session/update') {
       const params = (msg['params'] ?? {}) as Record<string, unknown>;
-      const update = (params['update'] ?? params) as Record<string, unknown>;
-      const kind = String(update['sessionUpdate'] ?? update['type'] ?? '');
+      const update = (params['update'] ?? {}) as Record<string, unknown>;
+      const kind = String(update['sessionUpdate'] ?? '');
 
-      if (kind === 'agent_message_chunk' || kind === 'AgentMessageChunk') {
+      if (kind === 'agent_message_chunk') {
         const content = update['content'] as { text?: string } | undefined;
         this.emit('event', { type: 'message', text: content?.text ?? '', raw: update } as AcpEvent);
-      } else if (kind === 'tool_call' || kind === 'ToolCall') {
+      } else if (kind === 'tool_call') {
         this.emit('event', {
           type: 'tool_call',
-          toolName: String(update['title'] ?? update['toolName'] ?? update['name'] ?? 'tool'),
+          toolName: String(update['title'] ?? update['toolName'] ?? update['kind'] ?? 'tool'),
           toolStatus: String(update['status'] ?? 'started'),
           raw: update,
         } as AcpEvent);
-      } else if (kind === 'tool_call_update' || kind === 'ToolCallUpdate') {
+      } else if (kind === 'tool_call_update') {
         this.emit('event', {
           type: 'tool_update',
           toolName: String(update['title'] ?? update['toolName'] ?? ''),
           toolStatus: String(update['status'] ?? ''),
           raw: update,
         } as AcpEvent);
-      } else if (kind === 'turn_end' || kind === 'TurnEnd') {
-        this.emit('event', { type: 'turn_end', raw: update } as AcpEvent);
       }
     }
   }

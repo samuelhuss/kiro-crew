@@ -33,8 +33,9 @@ async function main(): Promise<void> {
 
   const server = createApiServer({ service, assessmentRepo });
   const port = Number(process.env['PORT'] ?? 3000);
-  server.listen(port, () => {
-    logger.info('migration API listening', { port, preScanRegion: preScanRegion ?? null });
+  const host = process.env['HOST'] ?? '127.0.0.1';
+  server.listen(port, host, () => {
+    logger.info('migration API listening', { host, port, preScanRegion: preScanRegion ?? null });
   });
 
   const shutdown = (): void => {
