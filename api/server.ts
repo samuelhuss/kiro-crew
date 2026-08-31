@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { createMigrationRouter, type MigrationRouterDeps } from './migration.routes.js';
 import { createAcpSession, getAcpSession, stopAcpSession, type AcpEvent } from './acp-bridge.js';
-import { applyCredentials, validateCreds, type AwsCredentials } from './creds.js';
+import { applyCredentials, validateCreds, type AwsCredentials, type CredsPayload } from './creds.js';
 import { logger } from '../infrastructure/aws/logger.js';
 
 /**
@@ -42,10 +42,19 @@ export function createApiServer(deps: MigrationRouterDeps): Server {
 
         // ── Credentials setup (writes AWS creds into the MCP env blocks) ───
         if (path === '/api/creds' && req.method === 'POST') {
-          const body = JSON.parse((await readBody(req)) || '{}') as Partial<AwsCredentials>;
-          const err = validateCreds(body);
-          if (err) return json(res, 400, { error: err });
-          const status = await applyCredentials(body as AwsCredentials);
+          const raw = JSON.parse((await readBody(req)) || '{}') as
+            (Partial<AwsCredentials> & { source?: Partial<AwsCredentials>; target?: Partial<AwsCredentials> & { accountId?: string } });
+          // Accept both the new { source, target? } shape and a legacy flat body.
+          const source = raw.source ?? raw;
+          const srcErr = validateCreds(source);
+          if (srcErr) return json(res, 400, { error: `origem: ${srcErr}` });
+          const payload: CredsPayload = { source: source as AwsCredentials };
+          if (raw.target && (raw.target.accessKeyId || raw.target.secretAccessKey)) {
+            const tgtErr = validateCreds(raw.target);
+            if (tgtErr) return json(res, 400, { error: `destino: ${tgtErr}` });
+            payload.target = raw.target as AwsCredentials & { accountId?: string };
+          }
+          const status = await applyCredentials(payload);
           return json(res, 200, status);
         }
 

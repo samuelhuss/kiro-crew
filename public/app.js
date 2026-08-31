@@ -43,21 +43,28 @@ function loadCreds() {
 $('btn-save-creds').onclick = async () => {
   stashCreds();
   const src = state.creds.source;
+  const tgt = state.creds.target;
   const status = $('creds-status');
   if (!src || !src.accessKeyId) {
     showStatus(status, 'Preencha as credenciais da conta origem.', true);
     return;
   }
+  const payload = { source: src };
+  const hasTarget = tgt && (tgt.accessKeyId || tgt.secretAccessKey);
+  if (hasTarget) payload.target = tgt;
   $('btn-save-creds').disabled = true;
   try {
     const resp = await fetch('/api/creds', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(src),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     });
     const data = await resp.json();
     if (!resp.ok) { showStatus(status, data.error || 'Falha ao salvar.', true); $('btn-save-creds').disabled = false; return; }
-    showStatus(status, `Gravado em ${data.serversUpdated.length} MCPs · região ${data.region} · key …${data.accessKeyIdTail}`, false);
+    let msg = `Origem gravada em ${data.serversUpdated.length} MCPs · região ${data.region} · key …${data.accessKeyIdTail}`;
+    if (data.target) msg += ` · destino: região ${data.target.region} · key …${data.target.accessKeyIdTail} (cross-account)`;
+    showStatus(status, msg, false);
     $('src-region').value = src.region;
-    setTimeout(() => { goStep(2); $('btn-save-creds').disabled = false; }, 700);
+    if (data.target) $('tgt-region').value = data.target.region;
+    setTimeout(() => { goStep(2); $('btn-save-creds').disabled = false; }, 800);
   } catch (e) {
     showStatus(status, 'Erro de rede: ' + e.message, true);
     $('btn-save-creds').disabled = false;
