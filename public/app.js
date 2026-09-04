@@ -290,14 +290,17 @@ function addToolCall(name, status) {
 
   const log = $('toolcalls');
   const key = 'tc-' + name.replace(/[^\w]/g, '');
+  const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   let row = log.querySelector(`[data-k="${key}"]`);
   if (!row) {
     row = document.createElement('div'); row.className = 'toolrow'; row.dataset.k = key;
+    row.dataset.t0 = now;
     row.innerHTML = `<span class="ic"><span class="spin"></span></span><span class="tn"></span><span class="ts"></span>`;
     row.querySelector('.tn').textContent = name;
+    row.title = name;
     log.appendChild(row);
   }
-  row.querySelector('.ts').textContent = status;
+  row.querySelector('.ts').textContent = done ? `✓ ${now}` : (row.dataset.t0 || now);
   if (done) row.querySelector('.ic').innerHTML = '<span class="check">✓</span>';
   log.scrollTop = log.scrollHeight;
 }

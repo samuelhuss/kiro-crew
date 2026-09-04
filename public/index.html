@@ -150,8 +150,9 @@
     @keyframes pulse { 50% { opacity: .55; } }
     @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
 
-    .panes { display: grid; grid-template-columns: 1.5fr 1fr; gap: 16px; }
+    .panes { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 16px; }
     .pane { background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px;
+      min-width: 0; overflow: hidden;
       display: flex; flex-direction: column; min-height: 420px; max-height: 560px; }
     .pane h3 { font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint);
       padding: 12px 14px; border-bottom: 1px solid var(--border-soft); flex: none; }
@@ -179,9 +180,11 @@
     .bubble ul, .bubble ol { margin: 6px 0 8px; padding-left: 20px; }
     .bubble li { margin: 3px 0; }
     .bubble code { font-family: var(--mono); font-size: 12px; background: var(--surface-2);
-      border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; }
+      border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px;
+      overflow-wrap: anywhere; word-break: break-word; }
     .bubble pre { background: #0f1420; color: #e6ebf4; border-radius: 9px; padding: 12px 14px;
-      overflow-x: auto; margin: 8px 0; font-family: var(--mono); font-size: 12px; line-height: 1.55; }
+      overflow-x: auto; margin: 8px 0; font-family: var(--mono); font-size: 12px; line-height: 1.55;
+      max-width: 100%; }
     .bubble pre code { background: none; border: none; padding: 0; color: inherit; }
     .bubble pre .k { color: #ff8f8f; } .bubble pre .s { color: #a5e0a5; } .bubble pre .n { color: #8fc4ff; }
     .cursor { display: inline-block; width: 6px; height: 14px; background: var(--accent);
@@ -190,7 +193,7 @@
     .empty-hint { color: var(--faint); font-size: 12.5px; text-align: center; padding: 30px 0; }
 
     /* step badge above an agent bubble (ties a message to a pipeline phase) */
-    .msg .col { display: flex; flex-direction: column; gap: 4px; max-width: 82%; }
+    .msg .col { display: flex; flex-direction: column; gap: 4px; max-width: 82%; min-width: 0; }
     .step-badge { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
       color: var(--accent); display: inline-flex; align-items: center; gap: 5px; padding-left: 2px; }
     .step-badge .b-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
@@ -218,15 +221,15 @@
       max-height: 460px; font-family: var(--mono); font-size: 12px; line-height: 1.55; }
 
     .toolrow { display: flex; align-items: center; gap: 9px; padding: 7px 0; font-family: var(--mono);
-      font-size: 12px; border-bottom: 1px solid var(--border-soft); animation: rise .3s ease both; }
+      font-size: 12px; border-bottom: 1px solid var(--border-soft); animation: rise .3s ease both; min-width: 0; }
     .toolrow:last-child { border-bottom: none; }
     .toolrow .ic { width: 16px; height: 16px; flex: none; display: grid; place-items: center; }
+    .toolrow .tn { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+    .toolrow .ts { flex: none; font-size: 10.5px; color: var(--faint); }
     .spin { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent);
       border-radius: 50%; animation: rot .7s linear infinite; }
     @keyframes rot { to { transform: rotate(360deg); } }
     .check { color: var(--ok); font-size: 13px; }
-    .toolrow .tn { color: var(--text); }
-    .toolrow .ts { margin-left: auto; font-size: 10.5px; color: var(--faint); }
 
     .composer { display: flex; gap: 10px; margin-top: 16px; }
     .composer input { flex: 1; }
