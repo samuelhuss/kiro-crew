@@ -96,6 +96,9 @@ $('btn-start').onclick = () => {
   goStep(3);
   setStage('discovery', 'active');
   chatEl().innerHTML = '<div class="empty-hint">Aguardando o orquestrador…</div>';
+  $('pane-tools').innerHTML = '<div class="d-empty">Nenhuma ferramenta executada ainda.</div>';
+  $('pane-arts').innerHTML = '<div class="d-empty">Nenhum artefato gerado ainda.</div>';
+  updateToolBadge();
   mcpSet.clear(); markMcpReady(); updateContext(0);
   $('mcp-chip').classList.remove('ready');
   startChat(msg, true);
@@ -241,7 +244,7 @@ function addUserBubble(text) {
   scrollChat();
 }
 
-// collapse/expand + copy on artifact cards
+// collapse/expand + copy on artifact cards, and mirror them into the drawer
 function wireArtifacts(root) {
   root.querySelectorAll('.artifact').forEach((art) => {
     if (art.dataset.wired) return; art.dataset.wired = '1';
@@ -255,7 +258,28 @@ function wireArtifacts(root) {
         copy.textContent = 'copiado ✓'; setTimeout(() => (copy.textContent = 'copiar'), 1500);
       });
     });
+    mirrorArtifact(art);
   });
+}
+
+// keep a copy of each artifact in the drawer Artefatos pane (keyed by its code)
+function mirrorArtifact(art) {
+  const code = art.dataset.code || '';
+  if (!code) return;
+  const pane = $('pane-arts');
+  const empty = pane.querySelector('.d-empty'); if (empty) empty.remove();
+  const k = 'art-' + code.length + '-' + code.slice(0, 40).replace(/[^\w]/g, '');
+  if (pane.querySelector(`[data-ak="${k}"]`)) return;
+  const clone = art.cloneNode(true);
+  clone.dataset.ak = k; clone.dataset.wired = '';
+  clone.querySelector('.a-head').addEventListener('click', (e) => {
+    if (e.target.classList.contains('a-copy')) return; clone.classList.toggle('open');
+  });
+  const cp = clone.querySelector('.a-copy');
+  if (cp) cp.addEventListener('click', () => {
+    navigator.clipboard.writeText(decodeURIComponent(code)).then(() => { cp.textContent = 'copiado ✓'; setTimeout(() => (cp.textContent = 'copiar'), 1500); });
+  });
+  pane.appendChild(clone);
 }
 
 // smooth streaming: buffer chunks, drain steadily, re-render the current turn
@@ -285,47 +309,56 @@ function renderTool(evt) {
   const stage = TOOL_STAGE[name] || (name && name.toLowerCase().includes('cloudformation') ? 'cfn' : null);
   if (stage) { chat.curStage = stage; if (done) setStage(stage, 'done'); else advanceStage(stage); }
 
-  clearHint();
-  const key = 'tool-' + (evt.toolId || name).replace(/[^\w]/g, '');
+  const key = (evt.toolId || name).replace(/[^\w]/g, '');
+  const cmd = evt.toolInput || '';
   const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const icHtml = failed ? '<span style="color:var(--err)">✗</span>' : (done ? '<span class="check">✓</span>' : '<span class="spin"></span>');
 
-  let el = chatEl().querySelector(`[data-k="${key}"]`);
+  // 1) compact inline pill in the chat flow (click → open drawer on Tools)
+  clearHint();
+  let pill = chatEl().querySelector(`[data-pill="${key}"]`);
+  if (!pill) {
+    finishTurn(); // freeze current agent bubble so the pill lands in order
+    pill = document.createElement('div');
+    pill.className = 'tool-pill'; pill.dataset.pill = key;
+    pill.onclick = () => { openDrawer('tools'); const c = $('pane-tools').querySelector(`[data-k="${key}"]`); if (c) { c.classList.add('open'); c.scrollIntoView({ block: 'nearest' }); } };
+    chatEl().appendChild(pill);
+  }
+  pill.classList.toggle('failed', failed);
+  pill.innerHTML = `<span class="ic">${icHtml}</span><span class="nm"><b>${esc2(name)}</b>${cmd ? ' ' + esc2(cmd) : ''}</span>`;
+
+  // 2) full card in the drawer Tools pane
+  const pane = $('pane-tools');
+  const emptyEl = pane.querySelector('.d-empty'); if (emptyEl) emptyEl.remove();
+  let el = pane.querySelector(`[data-k="${key}"]`);
   if (!el) {
-    // a tool call interrupts the current agent turn — freeze it so the tool
-    // appears inline after the text that preceded it, then a new bubble follows.
-    finishTurn();
     el = document.createElement('div');
     el.className = 'tool'; el.dataset.k = key; el.dataset.t0 = now;
-    el.innerHTML =
-      `<div class="t-head"><span class="t-ic"><span class="spin"></span></span>`
-      + `<span class="t-cmd"></span><span class="t-time"></span><span class="t-chev">▶</span></div>`
-      + `<div class="t-body"></div>`;
+    el.innerHTML = `<div class="t-head"><span class="t-ic"></span><span class="t-cmd"></span><span class="t-time"></span><span class="t-chev">▶</span></div><div class="t-body"></div>`;
     el.querySelector('.t-head').addEventListener('click', () => el.classList.toggle('open'));
-    chatEl().appendChild(el);
+    pane.appendChild(el);
+    updateToolBadge();
   }
-
-  // header: tool name + command preview
-  const cmd = evt.toolInput || '';
-  const cmdEl = el.querySelector('.t-cmd');
-  cmdEl.innerHTML = `<span class="n">${esc2(name)}</span>` + (cmd ? ` ${esc2(cmd)}` : '');
-  cmdEl.title = cmd ? `${name}  ${cmd}` : name;
-
-  // status → icon + color
   el.classList.toggle('failed', failed);
-  const ic = el.querySelector('.t-ic');
-  if (failed) ic.innerHTML = '<span style="color:var(--err)">✗</span>';
-  else if (done) ic.innerHTML = '<span class="check">✓</span>';
+  el.querySelector('.t-ic').innerHTML = icHtml;
+  const cmdEl = el.querySelector('.t-cmd');
+  cmdEl.innerHTML = `<b>${esc2(name)}</b>${cmd ? ' ' + esc2(cmd) : ''}`;
+  cmdEl.title = cmd ? `${name}  ${cmd}` : name;
   el.querySelector('.t-time').textContent = (done || failed) ? `${status} · ${now}` : (el.dataset.t0 || now);
-
-  // body: input (always) + output (when present)
-  const body = el.querySelector('.t-body');
-  let html = '';
-  if (cmd) html += `<div class="t-io"><span class="lbl">comando</span>${esc2(cmd)}</div>`;
-  if (evt.toolOutput) html += `<div class="t-io out"><span class="lbl">resultado</span>${esc2(evt.toolOutput)}</div>`;
-  body.innerHTML = html;
+  let bhtml = '';
+  if (cmd) bhtml += `<div class="t-io"><span class="lbl">comando</span>${esc2(cmd)}</div>`;
+  if (evt.toolOutput) bhtml += `<div class="t-io out"><span class="lbl">resultado</span>${esc2(evt.toolOutput)}</div>`;
+  el.querySelector('.t-body').innerHTML = bhtml;
   if (failed) el.classList.add('open');
 
   scrollChat();
+  pane.scrollTop = pane.scrollHeight;
+}
+
+function updateToolBadge() {
+  const n = $('pane-tools').querySelectorAll('.tool').length;
+  $('tool-badge').textContent = n ? `(${n})` : '';
+  $('fab-badge').textContent = String(n);
 }
 
 async function startChat(message, isFirst) {
@@ -400,3 +433,25 @@ $('btn-approve').onclick = () => {
 };
 
 loadCreds();
+
+// ── Floating tool drawer: minimize / open / tabs ──────────────────────────────
+function openDrawer(pane) {
+  $('drawer').classList.remove('min');
+  $('drawer-fab').classList.remove('show');
+  $('btn-drawer').classList.add('on');
+  if (pane) switchPane(pane);
+}
+function minimizeDrawer() {
+  $('drawer').classList.add('min');
+  $('drawer-fab').classList.add('show');
+  $('btn-drawer').classList.remove('on');
+}
+function switchPane(name) {
+  document.querySelectorAll('.d-tab').forEach((t) => t.classList.toggle('on', t.dataset.pane === name));
+  $('pane-tools').classList.toggle('on', name === 'tools');
+  $('pane-arts').classList.toggle('on', name === 'arts');
+}
+$('btn-min').onclick = minimizeDrawer;
+$('drawer-fab').onclick = () => openDrawer();
+$('btn-drawer').onclick = () => ($('drawer').classList.contains('min') ? openDrawer() : minimizeDrawer());
+document.querySelectorAll('.d-tab').forEach((t) => { t.onclick = () => switchPane(t.dataset.pane); });
