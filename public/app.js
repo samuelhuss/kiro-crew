@@ -64,6 +64,7 @@ $('btn-save-creds').onclick = async () => {
     const data = await resp.json();
     if (!resp.ok) { showStatus(status, data.error || 'Falha ao salvar.', true); $('btn-save-creds').disabled = false; return; }
     let msg = `Origem gravada em ${data.serversUpdated.length} MCPs · região ${data.region} · key …${data.accessKeyIdTail}`;
+    state.srcAcctTail = data.accessKeyIdTail;
     if (data.target) msg += ` · destino: região ${data.target.region} · key …${data.target.accessKeyIdTail} (cross-account)`;
     showStatus(status, msg, false);
     $('src-region').value = src.region;
@@ -88,6 +89,15 @@ $('btn-start').onclick = () => {
   const acct = $('tgt-account').value.trim();
   const extra = $('extra').value.trim();
   $('r-src').textContent = src; $('r-tgt').textContent = tgt;
+  // route cards: source identity + destination (cross-account or same)
+  $('r-src-acct').textContent = state.srcAcctTail ? `key …${state.srcAcctTail}` : 'conta atual';
+  const dstEl = document.querySelector('.acct.dst');
+  if (acct) {
+    $('r-tgt-acct').textContent = `conta ${acct}`;
+    if (dstEl) dstEl.title = 'cross-account';
+  } else {
+    $('r-tgt-acct').textContent = 'mesma conta';
+  }
   const cross = acct ? ` para a conta ${acct}` : '';
   const extraTxt = extra ? ` ${extra}.` : '';
   const msg = `Migre a aplicação de ${src} para ${tgt}${cross}.${extraTxt} `
@@ -118,6 +128,9 @@ function setStage(name, status) {
   if (!el) return;
   el.classList.remove('active', 'done');
   if (status) el.classList.add(status);
+  // light the connector link leading INTO this stage once it starts/finishes
+  const link = document.querySelector(`.link[data-link="${name}"]`);
+  if (link && status) link.classList.add('done');
 }
 function advanceStage(name) {
   // mark this stage active, and everything before it done

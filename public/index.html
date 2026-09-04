@@ -149,13 +149,38 @@
     .composer .btn { border-radius: 999px; }
 
     /* pipeline mini-strip above chat */
-    .pipeline { display: flex; justify-content: center; gap: 6px; padding: 12px 20px; border-bottom: 1px solid var(--border-soft); flex: none; flex-wrap: wrap; background: var(--surface); }
-    .pchip { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--faint); padding: 4px 12px; border-radius: 999px; }
-    .pchip .d { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); transition: all .3s; }
-    .pchip.active { color: var(--text); background: var(--accent-soft); } .pchip.active .d { background: var(--accent); animation: pulse 1.3s infinite; }
-    .pchip.done { color: var(--ok); } .pchip.done .d { background: var(--ok); }
-    @keyframes pulse { 50% { opacity: .4; } }
-    .route { align-self: center; font-family: var(--mono); font-size: 11px; color: var(--muted); margin-left: 6px; } .route b { color: var(--accent); }
+    /* pipeline header: route (account/region cards) + delicate stage rail */
+    .pipeline { flex: none; padding: 16px 20px 14px; border-bottom: 1px solid var(--border-soft);
+      background: linear-gradient(180deg, rgba(230,0,0,.03), rgba(255,255,255,0) 70%); }
+    .route-row { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+    .acct { display: flex; align-items: center; gap: 11px; padding: 9px 15px; border-radius: 14px;
+      background: rgba(255,255,255,.6); border: 1px solid var(--border); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      box-shadow: var(--shadow-sm); min-width: 190px; }
+    .acct .flag { width: 30px; height: 30px; border-radius: 9px; flex: none; display: grid; place-items: center; font-size: 13px; font-weight: 700;
+      background: var(--surface-2); color: var(--muted); }
+    .acct.src .flag { background: var(--surface-2); color: var(--muted); }
+    .acct.dst .flag { background: var(--accent-soft); color: var(--accent); }
+    .acct .info { min-width: 0; line-height: 1.35; }
+    .acct .lbl { font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); }
+    .acct .region { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--text); }
+    .acct .sub { font-family: var(--mono); font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .route-arrow { display: flex; align-items: center; color: var(--accent); font-size: 18px; }
+    .route-arrow .track { width: 34px; height: 2px; margin: 0 -3px; border-radius: 2px;
+      background: linear-gradient(90deg, var(--faint), var(--accent)); position: relative; overflow: hidden; }
+    .route-arrow .track::after { content: ""; position: absolute; inset: 0; width: 40%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,.9), transparent); animation: flow 1.8s linear infinite; }
+    @keyframes flow { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+
+    .rail { display: flex; align-items: center; justify-content: center; gap: 0; max-width: var(--col); margin: 0 auto; }
+    .pchip { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--faint); padding: 6px 14px; border-radius: 999px;
+      background: rgba(255,255,255,.55); border: 1px solid transparent; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); transition: all .3s; }
+    .pchip .d { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); transition: all .3s; box-shadow: 0 0 0 0 rgba(230,0,0,0); }
+    .pchip.active { color: var(--text); border-color: rgba(230,0,0,.25); background: rgba(253,236,236,.7); }
+    .pchip.active .d { background: var(--accent); box-shadow: 0 0 0 5px rgba(230,0,0,.14); animation: pulse 1.3s infinite; }
+    .pchip.done { color: var(--ok); } .pchip.done .d { background: var(--ok); box-shadow: 0 0 0 5px rgba(26,156,91,.12); }
+    .rail .link { width: 26px; height: 2px; background: var(--border); border-radius: 2px; transition: background .3s; }
+    .rail .link.done { background: var(--ok); }
+    @keyframes pulse { 50% { opacity: .45; } }
 
     /* ── Floating tool drawer (right) ─────────────────────────── */
     .drawer { position: absolute; top: 14px; right: 14px; bottom: 14px; width: 380px; max-width: calc(100% - 28px);
@@ -253,11 +278,34 @@
   <div id="view-exec">
     <div class="chat-col">
       <div class="pipeline">
-        <div class="pchip" data-stage="discovery"><span class="d"></span>Discovery</div>
-        <div class="pchip" data-stage="graph"><span class="d"></span>Grafo</div>
-        <div class="pchip" data-stage="assessment"><span class="d"></span>Assessment</div>
-        <div class="pchip" data-stage="cfn"><span class="d"></span>CFN fiel</div>
-        <div class="route"><b id="r-src">us-east-1</b> → <b id="r-tgt">sa-east-1</b></div>
+        <div class="route-row">
+          <div class="acct src">
+            <div class="flag">AWS</div>
+            <div class="info">
+              <div class="lbl">Origem</div>
+              <div class="region" id="r-src">us-east-1</div>
+              <div class="sub" id="r-src-acct">conta atual</div>
+            </div>
+          </div>
+          <div class="route-arrow"><span class="track"></span>➜</div>
+          <div class="acct dst">
+            <div class="flag">AWS</div>
+            <div class="info">
+              <div class="lbl">Destino</div>
+              <div class="region" id="r-tgt">sa-east-1</div>
+              <div class="sub" id="r-tgt-acct">mesma conta</div>
+            </div>
+          </div>
+        </div>
+        <div class="rail">
+          <div class="pchip" data-stage="discovery"><span class="d"></span>Discovery</div>
+          <div class="link" data-link="graph"></div>
+          <div class="pchip" data-stage="graph"><span class="d"></span>Grafo</div>
+          <div class="link" data-link="assessment"></div>
+          <div class="pchip" data-stage="assessment"><span class="d"></span>Assessment</div>
+          <div class="link" data-link="cfn"></div>
+          <div class="pchip" data-stage="cfn"><span class="d"></span>CFN fiel</div>
+        </div>
       </div>
       <div class="stream"><div class="stream-inner" id="chat"><div class="empty-hint">Aguardando o orquestrador…</div></div></div>
       <div class="dock"><div class="dock-inner">
