@@ -192,25 +192,17 @@ export class AcpSession extends EventEmitter {
       if (kind === 'agent_message_chunk') {
         const content = update['content'] as { text?: string } | undefined;
         this.push({ type: 'message', text: content?.text ?? '', raw: update } as AcpEvent);
-      } else if (kind === 'tool_call') {
+      } else if (kind === 'tool_call' || kind === 'tool_call_update') {
+        const meta = ((update['_meta'] as Record<string, unknown>)?.['kiro'] ?? {}) as Record<string, unknown>;
+        const name = String(meta['toolName'] ?? cleanTitle(update['title']) ?? 'tool');
         this.push({
-          type: 'tool_call',
+          type: kind === 'tool_call' ? 'tool_call' : 'tool_update',
           toolId: String(update['toolCallId'] ?? update['id'] ?? ''),
-          toolName: String(update['title'] ?? update['toolName'] ?? update['kind'] ?? 'tool'),
-          toolKind: String(update['kind'] ?? ''),
+          toolName: name,
+          toolKind: String(update['kind'] ?? meta['mcpServerName'] ?? ''),
           toolStatus: String(update['status'] ?? 'pending'),
-          toolInput: flattenIO(update['rawInput'] ?? update['input']),
-          toolOutput: flattenContent(update['content']),
-          raw: update,
-        } as AcpEvent);
-      } else if (kind === 'tool_call_update') {
-        this.push({
-          type: 'tool_update',
-          toolId: String(update['toolCallId'] ?? update['id'] ?? ''),
-          toolName: String(update['title'] ?? update['toolName'] ?? ''),
-          toolStatus: String(update['status'] ?? ''),
-          toolInput: flattenIO(update['rawInput'] ?? update['input']),
-          toolOutput: flattenContent(update['content']),
+          toolInput: flattenInput(update['rawInput']),
+          toolOutput: flattenOutput(update['rawOutput']),
           raw: update,
         } as AcpEvent);
       }
@@ -218,43 +210,61 @@ export class AcpSession extends EventEmitter {
   }
 }
 
-/** Compact a rawInput/input object into a short one-line string. */
-function flattenIO(v: unknown): string {
+/** "Running: @aws-api-mcp/call_aws" -> "call_aws" */
+function cleanTitle(t: unknown): string {
+  const s = String(t ?? '');
+  const m = s.match(/([\w-]+)\s*$/);
+  return m ? m[1] : s;
+}
+
+/** rawInput -> the actual command / a compact arg summary (drops __tool_use_purpose). */
+function flattenInput(v: unknown): string {
   if (v == null) return '';
   if (typeof v === 'string') return v.slice(0, 2000);
   try {
-    // common ACP shape: { command: "aws ..." } or arbitrary args object
-    const o = v as Record<string, unknown>;
+    const o = { ...(v as Record<string, unknown>) };
+    delete o['__tool_use_purpose'];
+    // aws-api-mcp uses cli_command; others use command; else summarise the args
+    if (typeof o['cli_command'] === 'string') return String(o['cli_command']).slice(0, 2000);
     if (typeof o['command'] === 'string') return String(o['command']).slice(0, 2000);
-    return JSON.stringify(v).slice(0, 2000);
+    const keys = Object.keys(o);
+    if (keys.length === 0) return '';
+    return JSON.stringify(o).slice(0, 2000);
   } catch {
     return '';
   }
 }
 
-/** Extract text from an ACP content array/object (tool output). */
-function flattenContent(v: unknown): string {
+/** rawOutput -> text. aws-api-mcp shape: { items: [ { Json: { content: [ {text} ] } } ] }. */
+function flattenOutput(v: unknown): string {
   if (v == null) return '';
-  if (typeof v === 'string') return v.slice(0, 4000);
+  if (typeof v === 'string') return v.slice(0, 6000);
   try {
-    if (Array.isArray(v)) {
-      return v
-        .map((c) => {
-          const o = (c ?? {}) as Record<string, unknown>;
-          const inner = (o['content'] ?? {}) as Record<string, unknown>;
-          return String(o['text'] ?? inner['text'] ?? '');
-        })
-        .filter(Boolean)
-        .join('\n')
-        .slice(0, 4000);
-    }
     const o = v as Record<string, unknown>;
-    return String(o['text'] ?? JSON.stringify(v)).slice(0, 4000);
+    const items = o['items'];
+    if (Array.isArray(items)) {
+      const texts: string[] = [];
+      for (const it of items) {
+        const j = ((it ?? {}) as Record<string, unknown>)['Json'] as Record<string, unknown> | undefined;
+        const content = (j?.['content'] ?? (it as Record<string, unknown>)?.['content']) as unknown;
+        if (Array.isArray(content)) {
+          for (const c of content) {
+            const t = ((c ?? {}) as Record<string, unknown>)['text'];
+            if (typeof t === 'string') texts.push(t);
+          }
+        } else if (typeof (it as Record<string, unknown>)['text'] === 'string') {
+          texts.push(String((it as Record<string, unknown>)['text']));
+        }
+      }
+      if (texts.length) return texts.join('\n').slice(0, 6000);
+    }
+    return JSON.stringify(v).slice(0, 6000);
   } catch {
     return '';
   }
 }
 
+/** Compact a rawInput/input object into a short one-line string. */
 /** Registry of live sessions (one per browser session). */
 const sessions = new Map<string, AcpSession>();
 

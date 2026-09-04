@@ -8,9 +8,13 @@ const state = { sessionId: null, acct: 'source', creds: { source: null, target: 
 
 // ── Step navigation ──────────────────────────────────────────────────────────
 function goStep(n) {
-  ['creds', 'params', 'exec'].forEach((k, i) => {
-    $('card-' + k).classList.toggle('hidden', i !== n - 1);
-  });
+  // steps 1-2 use the centered cards; step 3 is the full chat view
+  $('card-creds').classList.toggle('hidden', n !== 1);
+  $('card-params').classList.toggle('hidden', n !== 2);
+  $('center-wrap').classList.toggle('hidden', n === 3);
+  $('view-exec').classList.toggle('show', n === 3);
+  $('stepper').classList.toggle('hidden', n === 3);
+  $('hdr-status').style.visibility = n === 3 ? 'visible' : 'hidden';
   document.querySelectorAll('.step-pill').forEach((p) => {
     const s = Number(p.dataset.step);
     p.classList.toggle('active', s === n);
@@ -92,7 +96,6 @@ $('btn-start').onclick = () => {
   goStep(3);
   setStage('discovery', 'active');
   chatEl().innerHTML = '<div class="empty-hint">Aguardando o orquestrador…</div>';
-  $('toolcalls').innerHTML = '';
   mcpSet.clear(); markMcpReady(); updateContext(0);
   $('mcp-chip').classList.remove('ready');
   startChat(msg, true);
@@ -108,7 +111,7 @@ const TOOL_STAGE = {
 const STAGE_ORDER = ['discovery', 'graph', 'assessment', 'cfn'];
 
 function setStage(name, status) {
-  const el = document.querySelector(`.stage[data-stage="${name}"]`);
+  const el = document.querySelector(`.pchip[data-stage="${name}"]`);
   if (!el) return;
   el.classList.remove('active', 'done');
   if (status) el.classList.add(status);
@@ -119,7 +122,7 @@ function advanceStage(name) {
   if (idx < 0) return;
   STAGE_ORDER.forEach((s, i) => {
     if (i < idx) setStage(s, 'done');
-    else if (i === idx) { const el = document.querySelector(`.stage[data-stage="${s}"]`); if (!el.classList.contains('done')) setStage(s, 'active'); }
+    else if (i === idx) { const el = document.querySelector(`.pchip[data-stage="${s}"]`); if (el && !el.classList.contains('done')) setStage(s, 'active'); }
   });
 }
 
@@ -128,7 +131,7 @@ const chat = { buf: '', turnRaw: '', turnEl: null, curStage: null, timer: null }
 
 function chatEl() { return $('chat'); }
 function clearHint() { const h = chatEl().querySelector('.empty-hint'); if (h) h.remove(); }
-function scrollChat() { const b = chatEl().closest('.body'); if (b) b.scrollTop = b.scrollHeight; }
+function scrollChat() { const b = document.querySelector('.stream'); if (b) b.scrollTop = b.scrollHeight; }
 
 const STAGE_LABEL = { discovery: 'Discovery', graph: 'Grafo', assessment: 'Assessment', cfn: 'CloudFormation' };
 const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -190,43 +193,29 @@ function parseSegments(raw) {
   return segs;
 }
 
-/** Build the DOM for one agent turn from its raw text (multiple bubbles + cards). */
+/** Build the DOM for one agent turn: one message, prose + artifact cards inside .body. */
 function renderTurn(container, raw, showCursor) {
   const segs = parseSegments(raw);
-  let html = '';
-  let bubbleOpen = false;
-  const badge = () => (chat.curStage ? `<span class="step-badge"><span class="b-dot"></span>${STAGE_LABEL[chat.curStage] || ''}</span>` : '');
-  const openBubble = () => { if (!bubbleOpen) { html += `<div class="msg agent"><div class="avatar">c</div><div class="col">${badge()}`; bubbleOpen = true; } };
-  const closeBubble = () => { if (bubbleOpen) { html += '</div></div>'; bubbleOpen = false; } };
-
+  let inner = '';
   segs.forEach((s) => {
     if (s.t === 'prose') {
-      const inner = mdProse(s.text);
-      if (!inner.trim()) return;
-      openBubble();
-      html += `<div class="bubble">${inner}</div>`;
+      const h = mdProse(s.text);
+      if (h.trim()) inner += h;
     } else {
-      closeBubble();
       const a = classifyArtifact(s.lang, s.code);
       const lines = s.code.split('\n').length;
       const bytes = new Blob([s.code]).size;
       const openCls = s.streaming ? ' open' : '';
-      html += `<div class="msg agent"><div class="avatar">c</div><div class="col" style="width:100%">`
-        + `<div class="artifact${openCls}" data-code="${encodeURIComponent(s.code)}">`
+      inner += `<div class="artifact${openCls}" data-code="${encodeURIComponent(s.code)}">`
         + `<div class="a-head"><div class="a-ic">${a.icon}</div>`
         + `<div class="a-meta"><div class="a-title">${esc(a.title)}</div>`
         + `<div class="a-sub">${lines} linhas · ${(bytes / 1024).toFixed(1)} KB${s.streaming ? ' · gerando…' : ''}</div></div>`
-        + `<div class="a-actions"><button class="a-btn a-copy">copiar</button><span class="a-chevron">▶</span></div></div>`
-        + `<div class="a-body"><pre>${esc(s.code)}</pre></div></div></div></div>`;
+        + `<button class="a-btn a-copy">copiar</button><span class="a-chevron">▶</span></div>`
+        + `<div class="a-body"><pre>${esc(s.code)}</pre></div></div>`;
     }
   });
-  closeBubble();
-  container.innerHTML = html;
-  if (showCursor) {
-    const bubbles = container.querySelectorAll('.msg.agent .bubble');
-    const lastB = bubbles[bubbles.length - 1];
-    if (lastB) lastB.insertAdjacentHTML('beforeend', '<span class="cursor"></span>');
-  }
+  if (showCursor) inner += '<span class="cursor"></span>';
+  container.innerHTML = `<div class="msg agent"><div class="avatar">c</div><div class="body">${inner}</div></div>`;
 }
 
 function startTurn() {
@@ -246,8 +235,8 @@ function addUserBubble(text) {
   finishTurn();
   const msg = document.createElement('div');
   msg.className = 'msg user';
-  msg.innerHTML = `<div class="avatar">▲</div><div class="bubble"></div>`;
-  msg.querySelector('.bubble').textContent = text;
+  msg.innerHTML = `<div class="avatar">▲</div><div class="body"></div>`;
+  msg.querySelector('.body').textContent = text;
   chatEl().appendChild(msg);
   scrollChat();
 }
@@ -296,23 +285,30 @@ function renderTool(evt) {
   const stage = TOOL_STAGE[name] || (name && name.toLowerCase().includes('cloudformation') ? 'cfn' : null);
   if (stage) { chat.curStage = stage; if (done) setStage(stage, 'done'); else advanceStage(stage); }
 
-  const log = $('toolcalls');
+  clearHint();
   const key = 'tool-' + (evt.toolId || name).replace(/[^\w]/g, '');
   const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-  let el = log.querySelector(`[data-k="${key}"]`);
+  let el = chatEl().querySelector(`[data-k="${key}"]`);
   if (!el) {
+    // a tool call interrupts the current agent turn — freeze it so the tool
+    // appears inline after the text that preceded it, then a new bubble follows.
+    finishTurn();
     el = document.createElement('div');
     el.className = 'tool'; el.dataset.k = key; el.dataset.t0 = now;
     el.innerHTML =
       `<div class="t-head"><span class="t-ic"><span class="spin"></span></span>`
-      + `<span class="t-name"></span><span class="t-time"></span><span class="t-chev">▶</span></div>`
+      + `<span class="t-cmd"></span><span class="t-time"></span><span class="t-chev">▶</span></div>`
       + `<div class="t-body"></div>`;
-    el.querySelector('.t-name').textContent = name;
-    el.querySelector('.t-name').title = name;
     el.querySelector('.t-head').addEventListener('click', () => el.classList.toggle('open'));
-    log.appendChild(el);
+    chatEl().appendChild(el);
   }
+
+  // header: tool name + command preview
+  const cmd = evt.toolInput || '';
+  const cmdEl = el.querySelector('.t-cmd');
+  cmdEl.innerHTML = `<span class="n">${esc2(name)}</span>` + (cmd ? ` ${esc2(cmd)}` : '');
+  cmdEl.title = cmd ? `${name}  ${cmd}` : name;
 
   // status → icon + color
   el.classList.toggle('failed', failed);
@@ -321,16 +317,15 @@ function renderTool(evt) {
   else if (done) ic.innerHTML = '<span class="check">✓</span>';
   el.querySelector('.t-time').textContent = (done || failed) ? `${status} · ${now}` : (el.dataset.t0 || now);
 
-  // input (always) + output (on expand)
+  // body: input (always) + output (when present)
   const body = el.querySelector('.t-body');
   let html = '';
-  if (evt.toolInput) html += `<div class="t-io"><span class="lbl">input</span>${esc2(evt.toolInput)}</div>`;
-  if (evt.toolOutput) html += `<div class="t-io out"><span class="lbl">output</span>${esc2(evt.toolOutput)}</div>`;
-  if (html) body.innerHTML = html;
-  // auto-open failures so the user sees the error immediately
+  if (cmd) html += `<div class="t-io"><span class="lbl">comando</span>${esc2(cmd)}</div>`;
+  if (evt.toolOutput) html += `<div class="t-io out"><span class="lbl">resultado</span>${esc2(evt.toolOutput)}</div>`;
+  body.innerHTML = html;
   if (failed) el.classList.add('open');
 
-  log.scrollTop = log.scrollHeight;
+  scrollChat();
 }
 
 async function startChat(message, isFirst) {
