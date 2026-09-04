@@ -92,6 +92,9 @@ $('btn-start').onclick = () => {
   goStep(3);
   setStage('discovery', 'active');
   chatEl().innerHTML = '<div class="empty-hint">Aguardando o orquestrador…</div>';
+  $('toolcalls').innerHTML = '';
+  mcpSet.clear(); markMcpReady(); updateContext(0);
+  $('mcp-chip').classList.remove('ready');
   startChat(msg, true);
 };
 
@@ -283,25 +286,50 @@ function drain() {
   chat.timer = setTimeout(drain, 18);
 }
 
-function addToolCall(name, status) {
-  const stage = TOOL_STAGE[name] || (name && name.toLowerCase().includes('cloudformation') ? 'cfn' : null);
+function esc2(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function renderTool(evt) {
+  const name = evt.toolName || 'tool';
+  const status = evt.toolStatus || '';
   const done = /complet|success|done|finish/i.test(status);
+  const failed = /fail|error|denied|reject/i.test(status);
+  const stage = TOOL_STAGE[name] || (name && name.toLowerCase().includes('cloudformation') ? 'cfn' : null);
   if (stage) { chat.curStage = stage; if (done) setStage(stage, 'done'); else advanceStage(stage); }
 
   const log = $('toolcalls');
-  const key = 'tc-' + name.replace(/[^\w]/g, '');
+  const key = 'tool-' + (evt.toolId || name).replace(/[^\w]/g, '');
   const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  let row = log.querySelector(`[data-k="${key}"]`);
-  if (!row) {
-    row = document.createElement('div'); row.className = 'toolrow'; row.dataset.k = key;
-    row.dataset.t0 = now;
-    row.innerHTML = `<span class="ic"><span class="spin"></span></span><span class="tn"></span><span class="ts"></span>`;
-    row.querySelector('.tn').textContent = name;
-    row.title = name;
-    log.appendChild(row);
+
+  let el = log.querySelector(`[data-k="${key}"]`);
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'tool'; el.dataset.k = key; el.dataset.t0 = now;
+    el.innerHTML =
+      `<div class="t-head"><span class="t-ic"><span class="spin"></span></span>`
+      + `<span class="t-name"></span><span class="t-time"></span><span class="t-chev">▶</span></div>`
+      + `<div class="t-body"></div>`;
+    el.querySelector('.t-name').textContent = name;
+    el.querySelector('.t-name').title = name;
+    el.querySelector('.t-head').addEventListener('click', () => el.classList.toggle('open'));
+    log.appendChild(el);
   }
-  row.querySelector('.ts').textContent = done ? `✓ ${now}` : (row.dataset.t0 || now);
-  if (done) row.querySelector('.ic').innerHTML = '<span class="check">✓</span>';
+
+  // status → icon + color
+  el.classList.toggle('failed', failed);
+  const ic = el.querySelector('.t-ic');
+  if (failed) ic.innerHTML = '<span style="color:var(--err)">✗</span>';
+  else if (done) ic.innerHTML = '<span class="check">✓</span>';
+  el.querySelector('.t-time').textContent = (done || failed) ? `${status} · ${now}` : (el.dataset.t0 || now);
+
+  // input (always) + output (on expand)
+  const body = el.querySelector('.t-body');
+  let html = '';
+  if (evt.toolInput) html += `<div class="t-io"><span class="lbl">input</span>${esc2(evt.toolInput)}</div>`;
+  if (evt.toolOutput) html += `<div class="t-io out"><span class="lbl">output</span>${esc2(evt.toolOutput)}</div>`;
+  if (html) body.innerHTML = html;
+  // auto-open failures so the user sees the error immediately
+  if (failed) el.classList.add('open');
+
   log.scrollTop = log.scrollHeight;
 }
 
@@ -325,9 +353,14 @@ function openStream() {
     switch (evt.type) {
       case 'message': typeInto(evt.text || ''); break;
       case 'tool_call':
-      case 'tool_update': addToolCall(evt.toolName || 'tool', evt.toolStatus || ''); break;
+      case 'tool_update': renderTool(evt); break;
+      case 'context': updateContext(evt.contextPct); break;
+      case 'mcp': markMcpReady(evt.mcpServer); break;
       case 'turn_end':
         finishTurn();
+        if (evt.stopReason && evt.stopReason !== 'end_turn') {
+          typeInto(`\n_(turno encerrado: ${evt.stopReason})_\n`);
+        }
         $('approval').classList.add('show');
         $('btn-send').disabled = false;
         break;
@@ -335,6 +368,24 @@ function openStream() {
     }
   };
   es.onerror = () => { es.close(); state.streaming = false; };
+}
+
+// context usage bar
+function updateContext(pct) {
+  if (typeof pct !== 'number') return;
+  const p = Math.max(0, Math.min(100, Math.round(pct)));
+  const fill = $('ctx-fill'); const label = $('ctx-pct');
+  if (fill) fill.style.width = p + '%';
+  if (label) label.textContent = p + '%';
+}
+
+// MCP readiness chip
+const mcpSet = new Set();
+function markMcpReady(name) {
+  if (name) mcpSet.add(name);
+  const chip = $('mcp-chip'); const count = $('mcp-count');
+  if (count) count.textContent = `MCPs ${mcpSet.size}/6`;
+  if (chip && mcpSet.size >= 6) chip.classList.add('ready');
 }
 
 $('btn-send').onclick = () => {

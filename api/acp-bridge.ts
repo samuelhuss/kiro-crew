@@ -16,11 +16,25 @@ import { logger } from '../infrastructure/aws/logger.js';
  */
 
 export interface AcpEvent {
-  type: 'message' | 'tool_call' | 'tool_update' | 'turn_end' | 'error' | 'ready';
+  type: 'message' | 'tool_call' | 'tool_update' | 'turn_end' | 'error' | 'ready' | 'context' | 'mcp';
   /** For message: streamed text. For tool_call: the tool name. */
   text?: string;
   toolName?: string;
   toolStatus?: string;
+  /** Stable id to correlate a tool_call with its later tool_update(s). */
+  toolId?: string;
+  /** read | edit | execute | fetch | etc. */
+  toolKind?: string;
+  /** The tool's input (command/args) as a compact string. */
+  toolInput?: string;
+  /** The tool's output/result as a compact string. */
+  toolOutput?: string;
+  /** For type 'context': percentage of the model context window used. */
+  contextPct?: number;
+  /** For type 'mcp': the MCP server that just initialized. */
+  mcpServer?: string;
+  /** For turn_end: why the turn stopped (end_turn, max_tokens, refusal…). */
+  stopReason?: string;
   raw?: unknown;
 }
 
@@ -151,14 +165,27 @@ export class AcpSession extends EventEmitter {
         return;
       }
       if (result['stopReason']) {
-        this.push({ type: 'turn_end', raw: result } as AcpEvent);
+        this.push({ type: 'turn_end', stopReason: String(result['stopReason']), raw: result } as AcpEvent);
         return;
       }
     }
 
+    const method = String(msg['method'] ?? '');
+    const params = (msg['params'] ?? {}) as Record<string, unknown>;
+
+    // Kiro extension notifications: MCP servers coming up + context usage.
+    if (method === '_kiro.dev/mcp/server_initialized') {
+      this.push({ type: 'mcp', mcpServer: String(params['serverName'] ?? '') } as AcpEvent);
+      return;
+    }
+    if (method === '_kiro.dev/metadata') {
+      const pct = params['contextUsagePercentage'];
+      if (typeof pct === 'number') this.push({ type: 'context', contextPct: pct } as AcpEvent);
+      return;
+    }
+
     // Notifications from the agent: method === 'session/update'
-    if (msg['method'] === 'session/update') {
-      const params = (msg['params'] ?? {}) as Record<string, unknown>;
+    if (method === 'session/update') {
       const update = (params['update'] ?? {}) as Record<string, unknown>;
       const kind = String(update['sessionUpdate'] ?? '');
 
@@ -168,19 +195,63 @@ export class AcpSession extends EventEmitter {
       } else if (kind === 'tool_call') {
         this.push({
           type: 'tool_call',
+          toolId: String(update['toolCallId'] ?? update['id'] ?? ''),
           toolName: String(update['title'] ?? update['toolName'] ?? update['kind'] ?? 'tool'),
-          toolStatus: String(update['status'] ?? 'started'),
+          toolKind: String(update['kind'] ?? ''),
+          toolStatus: String(update['status'] ?? 'pending'),
+          toolInput: flattenIO(update['rawInput'] ?? update['input']),
+          toolOutput: flattenContent(update['content']),
           raw: update,
         } as AcpEvent);
       } else if (kind === 'tool_call_update') {
         this.push({
           type: 'tool_update',
+          toolId: String(update['toolCallId'] ?? update['id'] ?? ''),
           toolName: String(update['title'] ?? update['toolName'] ?? ''),
           toolStatus: String(update['status'] ?? ''),
+          toolInput: flattenIO(update['rawInput'] ?? update['input']),
+          toolOutput: flattenContent(update['content']),
           raw: update,
         } as AcpEvent);
       }
     }
+  }
+}
+
+/** Compact a rawInput/input object into a short one-line string. */
+function flattenIO(v: unknown): string {
+  if (v == null) return '';
+  if (typeof v === 'string') return v.slice(0, 2000);
+  try {
+    // common ACP shape: { command: "aws ..." } or arbitrary args object
+    const o = v as Record<string, unknown>;
+    if (typeof o['command'] === 'string') return String(o['command']).slice(0, 2000);
+    return JSON.stringify(v).slice(0, 2000);
+  } catch {
+    return '';
+  }
+}
+
+/** Extract text from an ACP content array/object (tool output). */
+function flattenContent(v: unknown): string {
+  if (v == null) return '';
+  if (typeof v === 'string') return v.slice(0, 4000);
+  try {
+    if (Array.isArray(v)) {
+      return v
+        .map((c) => {
+          const o = (c ?? {}) as Record<string, unknown>;
+          const inner = (o['content'] ?? {}) as Record<string, unknown>;
+          return String(o['text'] ?? inner['text'] ?? '');
+        })
+        .filter(Boolean)
+        .join('\n')
+        .slice(0, 4000);
+    }
+    const o = v as Record<string, unknown>;
+    return String(o['text'] ?? JSON.stringify(v)).slice(0, 4000);
+  } catch {
+    return '';
   }
 }
 
