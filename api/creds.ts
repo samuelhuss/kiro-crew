@@ -1,4 +1,4 @@
-import { readFile, writeFile, rename } from 'node:fs/promises';
+import { readFile, writeFile, rename, mkdir, chmod } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { logger } from '../infrastructure/aws/logger.js';
@@ -50,6 +50,55 @@ export interface CredsStatus {
   accessKeyIdTail: string;
   /** Set when target (cross-account) credentials were also written. */
   target?: { region: string; accessKeyIdTail: string; accountId?: string };
+  /** Named AWS profiles written to ~/.aws/credentials for the orchestrator. */
+  profiles?: string[];
+}
+
+/** Where the shared AWS credential/config files live (aws-api-mcp reads these). */
+const AWS_DIR = process.env['AWS_PROFILE_DIR'] ?? join(homedir(), '.aws');
+const AWS_CRED_FILE = join(AWS_DIR, 'credentials');
+const AWS_CONFIG_FILE = join(AWS_DIR, 'config');
+const PROFILE_SOURCE = 'migration-source';
+const PROFILE_TARGET = 'migration-target';
+
+function credBlock(name: string, c: AwsCredentials): string {
+  let b = `[${name}]\n`;
+  b += `aws_access_key_id = ${c.accessKeyId}\n`;
+  b += `aws_secret_access_key = ${c.secretAccessKey}\n`;
+  if (c.sessionToken) b += `aws_session_token = ${c.sessionToken}\n`;
+  return b;
+}
+
+/**
+ * Write named AWS profiles (migration-source / migration-target) into
+ * ~/.aws/credentials and ~/.aws/config, so aws-api-mcp's call_aws can target
+ * either account with `--profile <name>`. The console POSTs the values; this
+ * runtime process writes them (agent code never authors credential values).
+ * Atomic temp+rename, files chmod 600. Returns the profile names written.
+ */
+async function writeAwsProfiles(source: AwsCredentials, target?: AwsCredentials): Promise<string[]> {
+  await mkdir(AWS_DIR, { recursive: true });
+
+  let creds = credBlock(PROFILE_SOURCE, source) + '\n';
+  let conf = `[profile ${PROFILE_SOURCE}]\nregion = ${source.region}\n\n`;
+  const written = [PROFILE_SOURCE];
+  if (target) {
+    creds += credBlock(PROFILE_TARGET, target) + '\n';
+    conf += `[profile ${PROFILE_TARGET}]\nregion = ${target.region}\n\n`;
+    written.push(PROFILE_TARGET);
+  }
+
+  const tmpC = `${AWS_CRED_FILE}.tmp`;
+  await writeFile(tmpC, creds, { mode: 0o600 });
+  await rename(tmpC, AWS_CRED_FILE);
+  await chmod(AWS_CRED_FILE, 0o600);
+
+  const tmpK = `${AWS_CONFIG_FILE}.tmp`;
+  await writeFile(tmpK, conf, { mode: 0o600 });
+  await rename(tmpK, AWS_CONFIG_FILE);
+  await chmod(AWS_CONFIG_FILE, 0o600);
+
+  return written;
 }
 
 /** Basic shape validation for STS temporary credentials. */
@@ -111,6 +160,14 @@ export async function applyCredentials(payload: CredsPayload): Promise<CredsStat
   await writeFile(tmp, JSON.stringify(cfg, null, 2) + '\n', 'utf-8');
   await rename(tmp, ORCHESTRATOR_CONFIG);
 
+  // Also write named profiles so call_aws can use --profile migration-source/target.
+  let profiles: string[] = [];
+  try {
+    profiles = await writeAwsProfiles(source, target);
+  } catch (err) {
+    logger.error('failed writing AWS profiles', { error: err instanceof Error ? err.message : String(err) });
+  }
+
   logger.info('orchestrator credentials updated', {
     servers: updated,
     region: source.region,
@@ -118,6 +175,7 @@ export async function applyCredentials(payload: CredsPayload): Promise<CredsStat
     crossAccount: Boolean(target),
     targetRegion: target?.region,
     targetAccountId: target?.accountId,
+    profiles,
   });
 
   const status: CredsStatus = {
@@ -125,6 +183,7 @@ export async function applyCredentials(payload: CredsPayload): Promise<CredsStat
     serversUpdated: updated,
     region: source.region,
     accessKeyIdTail: source.accessKeyId.slice(-4),
+    profiles,
   };
   if (target) {
     status.target = {
