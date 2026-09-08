@@ -253,6 +253,7 @@
       <div class="field"><label>AWS_SECRET_ACCESS_KEY</label><input class="mono" id="sk" type="password" placeholder="••••••••••••••••" autocomplete="off"></div>
       <div class="field"><label>AWS_SESSION_TOKEN</label><input class="mono" id="st" type="password" placeholder="token temporário" autocomplete="off"></div>
       <div class="field"><label>Região</label><input class="mono" id="rg" value="us-east-1"></div>
+      <div class="field hidden" id="acct-id-field"><label>Account ID do destino <span style="color:var(--faint)">(para compartilhar AMI/snapshot)</span></label><input class="mono" id="acct-id" placeholder="123456789012"></div>
       <div class="status-line" id="creds-status"></div>
       <div class="actions"><button class="btn primary" id="btn-save-creds">Salvar e continuar →</button></div>
       <p class="hint">Origem grava nos 6 MCPs agora. Destino fica guardado para o modo cross-account. Só a conta origem é obrigatória.</p>

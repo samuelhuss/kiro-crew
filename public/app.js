@@ -29,6 +29,8 @@ document.querySelectorAll('#acct-seg button').forEach((b) => {
     stashCreds();
     state.acct = b.dataset.acct;
     document.querySelectorAll('#acct-seg button').forEach((x) => x.classList.toggle('on', x === b));
+    // account-id field only matters for the destination account (share step)
+    $('acct-id-field').classList.toggle('hidden', state.acct !== 'target');
     loadCreds();
   };
 });
@@ -36,12 +38,15 @@ function stashCreds() {
   state.creds[state.acct] = {
     accessKeyId: $('ak').value.trim(), secretAccessKey: $('sk').value.trim(),
     sessionToken: $('st').value.trim(), region: $('rg').value.trim(),
+    accountId: $('acct-id').value.trim(),
   };
 }
 function loadCreds() {
-  const c = state.creds[state.acct] || { accessKeyId: '', secretAccessKey: '', sessionToken: '', region: 'us-east-1' };
+  const def = state.acct === 'target' ? 'sa-east-1' : 'us-east-1';
+  const c = state.creds[state.acct] || { accessKeyId: '', secretAccessKey: '', sessionToken: '', region: def, accountId: '' };
   $('ak').value = c.accessKeyId; $('sk').value = c.secretAccessKey;
-  $('st').value = c.sessionToken; $('rg').value = c.region;
+  $('st').value = c.sessionToken; $('rg').value = c.region || def;
+  $('acct-id').value = c.accountId || '';
 }
 
 $('btn-save-creds').onclick = async () => {
@@ -66,9 +71,13 @@ $('btn-save-creds').onclick = async () => {
     let msg = `Origem gravada em ${data.serversUpdated.length} MCPs · região ${data.region} · key …${data.accessKeyIdTail}`;
     state.srcAcctTail = data.accessKeyIdTail;
     if (data.target) msg += ` · destino: região ${data.target.region} · key …${data.target.accessKeyIdTail} (cross-account)`;
+    if (data.profiles && data.profiles.length) msg += ` · profiles: ${data.profiles.join(', ')}`;
     showStatus(status, msg, false);
     $('src-region').value = src.region;
-    if (data.target) $('tgt-region').value = data.target.region;
+    if (data.target) {
+      $('tgt-region').value = data.target.region;
+      if (data.target.accountId) $('tgt-account').value = data.target.accountId;
+    }
     setTimeout(() => { goStep(2); $('btn-save-creds').disabled = false; }, 800);
   } catch (e) {
     showStatus(status, 'Erro de rede: ' + e.message, true);
