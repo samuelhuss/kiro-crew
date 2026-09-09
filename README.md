@@ -1,91 +1,67 @@
-# AWS Migration MVP — Discovery → Graph → Migration Analysis
+# AWS Migration MVP — Discovery → Graph → Faithful CFN → Migration
 
-Read-only AWS infrastructure discovery, dependency graphing, and cross-region migration analysis platform, powered by Kiro Crew autonomous agents.
+An AWS infrastructure **migration platform** driven by Kiro Crew agents: it discovers a source account, builds a dependency graph, groups resources into workloads, generates a **100%-faithful CloudFormation** template, and (after explicit approval) **executes** the migration cross-region or cross-account — all watchable through a visual console.
 
-**Pipeline**: scan → inventory → graph → migration assessment.  
-**Scope**: Analysis only. No resources are created, modified, or deleted.
+**Pipeline**: discover → total inventory → graph/workloads → assess → price → faithful CFN → **approval gate** → phased execution.
+**Safety**: the SOURCE account is never modified. Everything up to the approval gate is read-only / file-generating; only the TARGET account has resources created, and only after the user says so.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  aws-migration-orchestrator (single entry point for users)  │
-└────────┬──────────────────┬──────────────────┬──────────────┘
-         │                  │                  │
-         ▼                  ▼                  ▼
-┌─────────────────┐ ┌────────────────┐ ┌──────────────────────┐
-│ aws-discovery   │ │ infrastructure │ │ migration-analysis   │
-│ MCP server      │ │ -graph MCP     │ │ MCP server           │
-│ (19 collectors) │ │ server         │ │ (rules + analyzer)   │
-└────────┬────────┘ └───────┬────────┘ └──────────┬───────────┘
-         │                  │                     │
-         ▼                  ▼                     ▼
-   AWS APIs           inventory.json ←→ graph.json
-   (read-only)        (shared file store, lock-free)
+        Browser (Migration Console — Claro Empresas)
+                        │  HTTP + SSE
+                        ▼
+        ACP Bridge (api/, zero migration logic)
+                        │  spawns: kiro-cli acp --agent aws-migration-orchestrator
+                        ▼
+        ┌──────────── aws-migration-orchestrator ────────────┐
+        │        (single brain; owns the whole pipeline)      │
+        └──┬─────────┬──────────┬──────────┬────────┬─────────┘
+           ▼         ▼          ▼          ▼        ▼        ▼
+      discovery   graph    migration-  migration-  aws-    aws-api
+        MCP        MCP     analysis MCP planner MCP pricing  MCP
+           │         │          │          │      (uvx)    (uvx)
+           ▼         ▼          ▼          ▼        └─ AWS Pricing + AWS CLI (call_aws)
+       AWS APIs  inventory.json ←→ graph.json   IaC Generator + cfn-lint
+      (read-only)  (shared JSON file store, lock-free)
 ```
 
-### Pipeline stages
+- **The console is the visual face of the orchestrator, NOT a reimplementation.** It relays the user's message to the agent over ACP (`kiro-cli acp`) and streams the agent's narration + tool calls back via SSE. All migration logic lives in the orchestrator + its 6 MCP servers.
+- **6 MCP servers:** 4 custom Node servers (discovery, infrastructure-graph, migration-analysis, migration-planner) run from `dist/`; 2 AWS Labs servers via `uvx` (aws-pricing, aws-api). All AWS commands the orchestrator runs go through `@aws-api-mcp/call_aws` (there is no `aws` CLI binary on this host).
 
-| # | Stage | Server | Input | Output |
-|---|-------|--------|-------|--------|
-| 1 | **Discovery** | aws-discovery-mcp | AWS APIs (read-only) | `data/inventory/inventory.json` |
-| 2 | **Graph** | infrastructure-graph-mcp | Inventory JSON | `data/graph/graph.json` |
-| 3 | **Migration** | migration-analysis-mcp | Graph JSON | Migration Assessment |
+## The orchestrator pipeline
 
-Each stage has **single responsibility** and never calls AWS except stage 1. Stores are JSON files with atomic writes — no database locks, multiple readers, any agent can read at any time.
+When the user asks to migrate, the orchestrator runs automatically up to the approval gate:
 
-## Resource Coverage (27 types, 19 collectors)
+1. **Discovery (fidelity)** — `scan_region` collects the full config of the 27 supported types via the collectors. This is what makes the CFN faithful.
+2. **Total inventory (radar)** — lists EVERYTHING in the account (including types with no collector) via `call_aws`: AWS Resource Explorer if enabled, else `resourcegroupstaggingapi get-resources`. Each item is tagged **FIDELITY** (config captured) or **RADAR-ONLY** (seen but not yet recreatable — flagged honestly).
+3. **Group into workloads** — the graph only has infrastructure edges, so data-plane links (Lambda↔bucket/table) aren't in it. Grouping uses four signals so nothing is falsely "orphan": (a) structural graph clusters, (b) tags (Application/Project/Stack/cfn-stack-name), (c) naming prefixes, (d) IAM role policy ARNs. Leftovers are "avulsos", never "unrelated".
+4. **Ask scope (STOP)** — presents the grouped inventory and asks: **migrate a specific workload or the whole account?** Waits for the answer.
+5. **Assessment** — `analyze_resource_migration(source, target)` for the chosen scope (deterministic per-type rules).
+6. **Pricing** — target monthly cost + one-time migration cost via aws-pricing-mcp.
+7. **Diagram** — `.drawio` per application cluster.
+8. **Faithful CFN** — `generate_migration_manifest` + `generate_faithful_cfn` (CloudFormation IaC Generator reading real config via AWS Config → 100% faithful, no placeholders), adapted for the target.
 
-| Collector | Resource Types | Key Relationships |
-|-----------|---------------|-------------------|
-| network | VPC, Subnet, RouteTable, IGW, NAT, SecurityGroup | BELONGS_TO, RUNS_IN, ATTACHES_TO, ROUTES_THROUGH |
-| ec2 | EC2 Instance | RUNS_IN Subnet, BELONGS_TO VPC, USES SG/IAM |
-| ebs | EBS Volume | ATTACHED_TO Instance |
-| eip | Elastic IP | ASSOCIATED_WITH Instance/ENI |
-| ecs | ECS Cluster, Service | BELONGS_TO, RUNS_IN, USES SG, TARGETS TG |
-| elb | ALB/NLB, TargetGroup | RUNS_IN, USES SG, TARGETS |
-| rds | RDS Instance, DBCluster | RUNS_IN, USES SG, BELONGS_TO Cluster |
-| s3 | S3 Bucket | — |
-| lambda | Lambda Function | RUNS_IN, USES SG/Role |
-| iam | IAM Role | — (global) |
-| secrets | Secrets Manager Secret | — |
-| cloudwatch | CloudWatch Log Group | LOGS_FOR Lambda |
-| route53 | Route53 Hosted Zone | — (global) |
-| dynamodb | DynamoDB Table | — |
-| ecr | ECR Repository | — |
-| sqs | SQS Queue | USES DLQ |
-| sns | SNS Topic | — |
-| elasticache | ElastiCache Cluster | USES SG |
-| cloudfront | CloudFront Distribution | USES S3 origin |
+**Approval gate:** the orchestrator stops, shows the full faithful CFN + manifest + data-migration sequence, and asks *"Posso executar a migração?"*. It never touches the target before explicit approval.
 
-## Migration Rules (all 27 types covered)
+**Execution (after approval), phase by phase via `call_aws`:** networking stack → data (create-image/copy-image, snapshots) → compute stack → validate. Rollback = `delete-stack`. Reports status after each phase; stops on failure.
 
-Every resource type has a **deterministic** migration rule — no LLM chooses strategies:
+## Cross-region vs cross-account
 
-| Type | Strategy | Risk | Notes |
-|------|----------|------|-------|
-| VPC, Subnet, RT, IGW, SG | RECREATE | LOW | Config-only |
-| NAT Gateway | RECREATE | MEDIUM | New EIP needed |
-| EC2 Instance | SNAPSHOT_RESTORE | HIGH | AMI copy cross-region |
-| EBS Volume | SNAPSHOT_RESTORE | MEDIUM | Snapshot + restore |
-| Elastic IP | MANUAL | MEDIUM | IP changes (regional) |
-| ECS Cluster | RECREATE | LOW | Control-plane only |
-| ECS Service | RECREATE | MEDIUM | Needs image in target |
-| ALB/NLB | RECREATE | MEDIUM | DNS name changes |
-| TargetGroup | RECREATE | LOW | — |
-| RDS Instance/Cluster | SNAPSHOT_RESTORE | HIGH | Data transfer |
-| S3 Bucket | REPLICATE | MEDIUM | Global name conflict |
-| Lambda | RECREATE | MEDIUM | Deploy artifact needed |
-| IAM Role | NO_ACTION | LOW | Global service |
-| Secrets Manager | REPLICATE | HIGH | Value not exposed |
-| CloudWatch Logs | RECREATE | LOW | History not migrated |
-| Route53 Zone | NO_ACTION | MEDIUM | DNS repoint needed |
-| DynamoDB Table | REPLICATE | HIGH | Global Tables or backup |
-| ECR Repository | REPLICATE | MEDIUM | Image replication |
-| SQS Queue | RECREATE | MEDIUM | In-flight msgs lost |
-| SNS Topic | RECREATE | LOW | Subscriptions recreated |
-| ElastiCache | SNAPSHOT_RESTORE | MEDIUM | Redis only (no Memcached) |
-| CloudFront | NO_ACTION | LOW | Repoint origins |
+- **Cross-region (same account):** validated end-to-end twice (tstsrv us-east-1→sa-east-1). Uses the source credentials throughout.
+- **Cross-account (Option B — separate credentials):** the console's credential setup (`POST /api/creds`) writes named AWS profiles `migration-source` and `migration-target` (plus `MIGRATION_TARGET_ACCOUNT_ID`); the orchestrator picks an account per command with `--profile`. The DATA phase becomes **SHARE** (source creds: `modify-image-attribute --launch-permission`, snapshot share) → **COPY** (target creds: `copy-image`/`copy-snapshot`). KMS-encrypted artifacts with a custom CMK need the source key to grant the target account — flagged automatically.
+
+## Credentials setup (via the console)
+
+Nothing is edited in `~/.aws` by hand. In the console (step 1), the user pastes the temporary STS credentials for the **source** account and, for cross-account, the **destination** account + its Account ID. `POST /api/creds` (the Node runtime, not the agent) writes:
+- the `AWS_*` / `AWS_*_TARGET` env of the 4 AWS-touching MCPs, and
+- the `migration-source` / `migration-target` profiles into the shared AWS credentials/config files (atomic, chmod 600).
+
+Values arrive from the user over HTTP; the response is masked (`key …XXXX`), never the secret. STS credentials expire in hours — re-paste in the console to refresh.
+
+## Resource coverage (27 types, 19 collectors)
+
+network (VPC, Subnet, RouteTable, IGW, NAT, SecurityGroup), ec2, ebs, eip, ecs (Cluster+Service), elb (ALB/NLB+TargetGroup), rds (Instance+Cluster), s3, lambda, iam, secrets, cloudwatch logs, route53, dynamodb, ecr, sqs, sns, elasticache, cloudfront. Every type has a **deterministic** migration rule (RECREATE / SNAPSHOT_RESTORE / REPLICATE / NO_ACTION / MANUAL) with a fixed risk level — no LLM chooses strategies. Types without a collector are still surfaced by the radar step and flagged RADAR-ONLY.
 
 ## Quick Start
 
@@ -96,139 +72,73 @@ npm install
 npm run build
 ```
 
-### Run the pipeline via the orchestrator
-
-Open a chat with `aws-migration-orchestrator` in the Kiro Crew dashboard:
-
-```
-Como migrar us-east-1 para sa-east-1?
-```
-
-The orchestrator runs: `scan_region → build_graph → analyze_resource_migration` and returns the full assessment.
-
-### Run tests
+### Run the console (visual)
 
 ```bash
-npm test              # Full unit suite (128 tests)
-npm run test:kuzu     # Legacy Kuzu repo tests (if Kuzu is available)
-npm run test:integration  # Real AWS scan (requires credentials)
+PORT=8090 HOST=0.0.0.0 ORCHESTRATOR_CWD=/home/kirocrew/.kiro/crew/workspace node dist/api/main.js
 ```
 
-## Project Structure
+The console runs inside the Kiro Crew container. To reach it from your machine, publish the port with a socat sidecar on the Docker host (the container IP can change on restart — check with `hostname -I` or use the container name):
+
+```bash
+docker rm -f kiro-console-proxy 2>/dev/null
+docker run -d --name kiro-console-proxy -p 127.0.0.1:8080:8080 --network bridge \
+  alpine/socat tcp-listen:8080,fork,reuseaddr tcp-connect:<container-name-or-ip>:8090
+# then open http://localhost:8080
+```
+
+Steps in the UI: **1 Credenciais** → **2 Migração** → **3 Execução** (live chat with the orchestrator, a floating tool drawer, and a pipeline header showing source→target accounts).
+
+### Or drive the orchestrator directly
+
+Open a chat with `aws-migration-orchestrator` in the dashboard and ask, e.g.: `Migre o workload tstsrv de us-east-1 para sa-east-1`.
+
+### Tests
+
+```bash
+npm test                  # unit suite (128 tests)
+npm run test:integration  # real AWS scan (requires credentials)
+```
+
+## Project structure
 
 ```
 aws-migration-mvp/
-├── agents/                          # Agent configs (discovery, graph, migration, orchestrator)
+├── agents/aws-migration-orchestrator/agent.json   # versioned orchestrator prompt (sync w/ ~/.kiro live)
+├── api/
+│   ├── main.ts / server.ts        # HTTP server (binds 127.0.0.1 by default; 0.0.0.0 behind socat)
+│   ├── acp-bridge.ts              # spawns kiro-cli acp, relays session/update + tool I/O over SSE
+│   └── creds.ts                   # POST /api/creds: writes MCP env + AWS profiles (source/target)
+├── public/                        # console — index.html + app.js (Claro identity, tool drawer, pipeline)
 ├── mcp/
-│   ├── aws-discovery/src/index.ts   # Discovery MCP server (19 collectors)
-│   ├── graph-agent/src/index.ts     # Graph MCP server (8 query tools)
-│   └── migration-agent/src/index.ts # Migration MCP server (7 analysis tools)
+│   ├── aws-discovery/             # discovery MCP (19 collectors)
+│   ├── graph-agent/               # graph MCP (query/traversal tools)
+│   ├── migration-agent/           # migration-analysis MCP
+│   └── planner-agent/             # migration-planner MCP (manifest, faithful CFN, validate, adapt)
 ├── domain/
-│   ├── resources/                   # AwsResource, ResourceType, RegionInventory
-│   ├── relationships/               # RelationshipType (12 types)
-│   ├── graph/                       # GraphNode, GraphEdge, Builder, EdgeType (16 types)
-│   └── migration/                   # Rules, Analyzer, Assessment, Strategy
-├── infrastructure/aws/
-│   ├── client.ts                    # 16 AWS SDK v3 clients (cached per region)
-│   ├── scanner.ts                   # Orchestrates 19 concurrent collectors
-│   ├── logger.ts                    # Structured logger (stderr only — stdout = MCP)
-│   └── collectors/                  # 19 collector files
-├── repositories/
-│   ├── file-infrastructure.repository.ts  # JSON-backed inventory store
-│   ├── inventory-repository.factory.ts    # Selects file or in-memory
-│   └── graph/
-│       ├── file-graph.repository.ts       # JSON-backed graph store
-│       ├── graph-repository.factory.ts    # Selects file or in-memory
-│       ├── in-memory-graph.repository.ts  # Traversal engine (adjacency maps)
-│       └── graph.repository.ts            # Interface contract
-├── api/                             # HTTP API for migration assessments
-├── tests/unit/                      # 128 tests across 12 suites
-└── data/
-    ├── inventory/                   # Generated: inventory.json (gitignored)
-    └── graph/                       # Generated: graph.json (gitignored)
+│   ├── resources/ relationships/ graph/
+│   └── migration/                 # rules, analyzer, planner, iac-generator, data-migration, manifest, validator
+├── infrastructure/aws/            # SDK clients, scanner, collectors, logger
+├── repositories/                  # File-backed inventory + graph stores (atomic, lock-free)
+└── tests/unit/                    # 128 tests
 ```
 
-## Agent Tools
+## migration-planner MCP tools
 
-### Discovery (aws-discovery-mcp)
-| Tool | Description |
-|------|-------------|
-| `scan_region` | Full scan — 19 collectors in parallel, persists to inventory.json |
-| `list_resources` | List from cached scan, optional type filter |
-| `get_resource` | Full details by ID or ARN |
-| `get_resource_dependencies` | Direct dependencies + relationships |
+`generate_migration_plan`, `generate_cfn_templates` (scaffold/fallback), `validate_templates` (cfn-lint), `get_plan_summary`, `generate_migration_manifest`, `generate_faithful_cfn` (IaC Generator), `adapt_template_for_target`.
 
-### Graph (infrastructure-graph-mcp)
-| Tool | Description |
-|------|-------------|
-| `build_graph` | Build graph FROM inventory (no AWS call) |
-| `get_resource` | One node |
-| `get_resources_by_type` | Nodes of a type |
-| `get_dependencies` | What a resource depends on |
-| `get_dependents` | What depends on a resource |
-| `get_impact` | Transitive affected set |
-| `find_path` | Directed path between two resources |
-| `get_architecture` | Full graph + service breakdown + limitations |
+## Notes & known limitations
 
-### Migration (migration-analysis-mcp)
-| Tool | Description |
-|------|-------------|
-| `analyze_resource_migration` | Full assessment: source→target |
-| `get_migration_rule` | Deterministic rule for a type |
-| `get_infrastructure_graph` | Graph metadata + export |
-| `get_resource` / `get_dependencies` / `get_dependents` / `get_impact` | Scoped queries |
-
-## Edge Vocabulary (16 types)
-
-`CONTAINS`, `BELONGS_TO`, `DEPENDS_ON`, `USES`, `ASSOCIATED_WITH`, `RUNS_IN`,
-`CONNECTS_TO`, `TARGETS`, `ROUTES_TO`, `ROUTES_THROUGH`, `ATTACHES_TO`,
-`ASSUMES_ROLE`, `ATTACHED_TO`, `LOGS_FOR`, `READS_FROM`, `WRITES_TO`.
-
-## AWS IAM Policy Required
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": [
-      "ec2:Describe*",
-      "ecs:List*", "ecs:Describe*",
-      "elasticloadbalancing:Describe*",
-      "rds:Describe*",
-      "s3:ListAllMyBuckets", "s3:GetBucketLocation",
-      "lambda:ListFunctions",
-      "iam:ListRoles",
-      "secretsmanager:ListSecrets",
-      "logs:DescribeLogGroups",
-      "route53:ListHostedZones",
-      "dynamodb:ListTables", "dynamodb:DescribeTable",
-      "ecr:DescribeRepositories",
-      "sqs:ListQueues", "sqs:GetQueueAttributes",
-      "sns:ListTopics", "sns:GetTopicAttributes",
-      "elasticache:DescribeCacheClusters",
-      "cloudfront:ListDistributions",
-      "sts:GetCallerIdentity"
-    ],
-    "Resource": "*"
-  }]
-}
-```
-
-## Known Limitations
-
-1. **ECS task definition not resolved** — container image source / task role not linked as graph edges
-2. **S3 bucket metadata minimal** — encryption, policy, ACL not fetched
-3. **IAM roles not filtered** — all account roles returned (governance roles inflate count)
-4. **Cross-region dependencies not detected** — e.g., S3 in us-east-1 used by Lambda in eu-west-1
-5. **Route53 records not enumerated** — only zones collected (ALIAS/CNAME resolution is future)
-6. **No VPC Peering / Transit Gateway** — multi-VPC topology edges not yet derived
+- **Faithful CFN** uses the CloudFormation IaC Generator + AWS Config (recording ON in the source account) — reproduces SG rules, UserData, MetadataOptions verbatim.
+- **`aws-api-mcp` version pin:** the AWS Labs server is pinned (`uvx --with "mcp>=1.23,<2" awslabs.aws-api-mcp-server==1.5.4`) because `mcp` 2.x renamed `McpError`→`MCPError` and broke the import. `aws-pricing-mcp` is still `@latest` (pinnable if it ever breaks the same way).
+- **Graph has no data-plane edges** (READS_FROM/WRITES_TO) — who reads/writes each bucket/table isn't derivable from the inventory alone; the workload-grouping step compensates with tags/naming/IAM signals.
+- **RADAR-ONLY resources** (e.g. EventBridge Rules, SSM Parameters, MediaConvert) are listed but not yet faithfully recreatable — they need a dedicated collector or a manual step, stated explicitly, never dropped silently.
+- **Cross-region dependencies** and VPC Peering / Transit Gateway topology are not yet derived as edges.
 
 ## Roadmap
 
-- [ ] Relationship enrichment: ECS task def env vars → app→DB links
-- [ ] Incremental scan (diff with previous inventory)
-- [ ] Cost data integration (AWS Cost Explorer)
-- [ ] Migration Planner: generate IaC from assessment
-- [ ] Execution Engine: orchestrate actual migration
-- [ ] Interactive graph visualization (D3 artifact)
+- [ ] Validate cross-account end-to-end with two real accounts
+- [ ] Dedicated collectors for EventBridge Rules and SSM Parameter Store (close the FIDELITY gap)
+- [ ] Architecture-design step (target blueprint: RDS→Aurora, EC2→Fargate) before assessment
+- [ ] Execution progress bar (networking→data→compute→validate) + created-resource counter in the console
+- [ ] Cost data integration (Cost Explorer) and incremental scan (diff vs previous inventory)
