@@ -17,7 +17,16 @@
       ],
       "env": {
         "LOG_LEVEL": "info",
-        "INVENTORY_DIR": "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/data/inventory"
+        "INVENTORY_DIR": "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/data/inventory",
+        "AWS_ACCESS_KEY_ID": "",
+        "AWS_SECRET_ACCESS_KEY": "",
+        "AWS_SESSION_TOKEN": "",
+        "AWS_REGION": "",
+        "AWS_ACCESS_KEY_ID_TARGET": "",
+        "AWS_SECRET_ACCESS_KEY_TARGET": "",
+        "AWS_SESSION_TOKEN_TARGET": "",
+        "AWS_REGION_TARGET": "",
+        "MIGRATION_TARGET_ACCOUNT_ID": ""
       }
     },
     "infrastructure-graph-mcp": {
@@ -39,6 +48,62 @@
       "env": {
         "LOG_LEVEL": "info",
         "GRAPH_DIR": "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/data/graph"
+      }
+    },
+    "aws-pricing-mcp": {
+      "command": "uvx",
+      "args": [
+        "awslabs.aws-pricing-mcp-server@latest"
+      ],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR",
+        "AWS_REGION": "",
+        "AWS_ACCESS_KEY_ID": "",
+        "AWS_SECRET_ACCESS_KEY": "",
+        "AWS_SESSION_TOKEN": "",
+        "AWS_ACCESS_KEY_ID_TARGET": "",
+        "AWS_SECRET_ACCESS_KEY_TARGET": "",
+        "AWS_SESSION_TOKEN_TARGET": "",
+        "AWS_REGION_TARGET": "",
+        "MIGRATION_TARGET_ACCOUNT_ID": ""
+      }
+    },
+    "aws-api-mcp": {
+      "command": "uvx",
+      "args": [
+        "--with",
+        "mcp>=1.23,<2",
+        "awslabs.aws-api-mcp-server==1.5.4"
+      ],
+      "env": {
+        "AWS_REGION": "",
+        "AWS_ACCESS_KEY_ID": "",
+        "AWS_SECRET_ACCESS_KEY": "",
+        "AWS_SESSION_TOKEN": "",
+        "AWS_ACCESS_KEY_ID_TARGET": "",
+        "AWS_SECRET_ACCESS_KEY_TARGET": "",
+        "AWS_SESSION_TOKEN_TARGET": "",
+        "AWS_REGION_TARGET": "",
+        "MIGRATION_TARGET_ACCOUNT_ID": ""
+      }
+    },
+    "migration-planner-mcp": {
+      "command": "/home/kirocrew/.local/nodejs/bin/node",
+      "args": [
+        "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/dist/mcp/planner-agent/src/index.js"
+      ],
+      "env": {
+        "LOG_LEVEL": "info",
+        "GRAPH_DIR": "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/data/graph",
+        "AWS_ACCESS_KEY_ID": "",
+        "AWS_SECRET_ACCESS_KEY": "",
+        "AWS_SESSION_TOKEN": "",
+        "AWS_REGION": "",
+        "AWS_ACCESS_KEY_ID_TARGET": "",
+        "AWS_SECRET_ACCESS_KEY_TARGET": "",
+        "AWS_SESSION_TOKEN_TARGET": "",
+        "AWS_REGION_TARGET": "",
+        "MIGRATION_TARGET_ACCOUNT_ID": ""
       }
     }
   },
