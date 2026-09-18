@@ -19,7 +19,8 @@ export type GraphIssueKind =
   | 'CROSS_ACCOUNT' // edge connects resources in different accounts
   | 'UNEXPECTED_CYCLE' // a cycle in a relationship that should be acyclic
   | 'ORPHAN_NODE' // node participates in no edge
-  | 'UNKNOWN_RELATIONSHIP'; // relationship could not be determined from data
+  | 'UNKNOWN_RELATIONSHIP' // relationship could not be determined from data
+  | 'RADAR_SOURCED_NODE'; // node came from the total-inventory radar step, not a Stage-1 collector
 
 export interface GraphIssue {
   kind: GraphIssueKind;

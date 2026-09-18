@@ -422,6 +422,24 @@ const FORWARD_LOOKING_RULES: Record<string, MigrationRule['evaluate']> = {
         { blocker: 'KMS_KEY_UNAVAILABLE', severity: 'CRITICAL', description: 'KMS key material cannot cross regions.' },
       ],
     }),
+
+  'AWS::Events::Rule': () =>
+    result({
+      strategy: 'RECREATE',
+      status: 'SUPPORTED',
+      baseRisk: 'LOW',
+      reasoning: 'EventBridge rules are region-scoped configuration; recreate the rule and its targets in the target region.',
+      warnings: ['Target ARNs (Lambda, SQS, etc.) referenced by the rule must be updated to target-region resources.'],
+    }),
+
+  'AWS::SSM::Parameter': () =>
+    result({
+      strategy: 'RECREATE',
+      status: 'SUPPORTED',
+      baseRisk: 'LOW',
+      reasoning: 'SSM Parameter Store values are recreated directly from their source value.',
+      warnings: ['SecureString parameters need the KMS key available in the target region.'],
+    }),
 };
 
 /**

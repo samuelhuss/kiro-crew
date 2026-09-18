@@ -29,7 +29,11 @@ export type ResourceType =
   | 'AWS::SQS::Queue'
   | 'AWS::SNS::Topic'
   | 'AWS::ElastiCache::CacheCluster'
-  | 'AWS::CloudFront::Distribution';
+  | 'AWS::CloudFront::Distribution'
+  // Not collected by a Stage-1 collector — only reachable via the total-inventory
+  // radar step + AWS Config enrichment (see domain/migration/radar-integration.ts).
+  | 'AWS::Events::Rule'
+  | 'AWS::SSM::Parameter';
 
 export interface AwsResource {
   /** Provider-native unique identifier (e.g. VPC ID, ARN, bucket name) */

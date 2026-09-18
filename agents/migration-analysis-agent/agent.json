@@ -15,7 +15,8 @@
       ],
       "env": {
         "LOG_LEVEL": "info",
-        "GRAPH_DIR": "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/data/graph"
+        "GRAPH_DIR": "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/data/graph",
+        "TOTAL_INVENTORY_DIR": "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/data/inventory"
       }
     }
   },

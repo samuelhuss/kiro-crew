@@ -17,6 +17,9 @@ import { SQSClient } from '@aws-sdk/client-sqs';
 import { SNSClient } from '@aws-sdk/client-sns';
 import { ElastiCacheClient } from '@aws-sdk/client-elasticache';
 import { CloudFrontClient } from '@aws-sdk/client-cloudfront';
+import { ResourceExplorer2Client } from '@aws-sdk/client-resource-explorer-2';
+import { ResourceGroupsTaggingAPIClient } from '@aws-sdk/client-resource-groups-tagging-api';
+import { ConfigServiceClient } from '@aws-sdk/client-config-service';
 import { logger } from './logger.js';
 
 /**
@@ -47,6 +50,9 @@ export interface AwsClientSet {
   elasticache: ElastiCacheClient;
   cloudfront: CloudFrontClient;
   sts: STSClient;
+  resourceExplorer: ResourceExplorer2Client;
+  taggingApi: ResourceGroupsTaggingAPIClient;
+  configService: ConfigServiceClient;
 }
 
 /** Cache clients per region to avoid re-initialising on every tool call */
@@ -80,6 +86,9 @@ export function getClients(region: string): AwsClientSet {
     // CloudFront is global
     cloudfront: new CloudFrontClient({ region: 'us-east-1' }),
     sts: new STSClient(config),
+    resourceExplorer: new ResourceExplorer2Client(config),
+    taggingApi: new ResourceGroupsTaggingAPIClient(config),
+    configService: new ConfigServiceClient(config),
   };
 
   clientCache.set(region, clients);

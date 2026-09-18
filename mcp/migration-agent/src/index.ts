@@ -7,6 +7,7 @@ import {
 import { z } from 'zod';
 import { exportGraph } from '../../../domain/graph/graph.js';
 import { createGraphRepository } from '../../../repositories/graph/graph-repository.factory.js';
+import { createTotalInventoryRepository } from '../../../repositories/total-inventory-repository.factory.js';
 import { InMemoryAssessmentRepository } from '../../../repositories/migration/in-memory-assessment.repository.js';
 import { MigrationAnalysisService } from '../../../domain/migration/service.js';
 import { evaluateRule } from '../../../domain/migration/rules.js';
@@ -24,6 +25,7 @@ import { logger } from '../../../infrastructure/aws/logger.js';
  * Terraform, snapshots, replication, or DNS changes.
  */
 const graphRepo = createGraphRepository();
+const totalInventoryRepo = createTotalInventoryRepository();
 const assessmentRepo = new InMemoryAssessmentRepository();
 const service = new MigrationAnalysisService(graphRepo, assessmentRepo);
 
@@ -157,9 +159,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'analyze_resource_migration': {
         const { sourceRegion, targetRegion } = AnalyzeInput.parse(args);
-        // Pipeline guard: the graph must already exist (built by the graph agent).
+        // Pipeline guard: need either a built graph or a total-inventory radar report.
         const graph = await graphRepo.getGraph();
-        if (graph.nodes.length === 0) {
+        const radarReport = await totalInventoryRepo.getReport(sourceRegion);
+        if (graph.nodes.length === 0 && !radarReport) {
           return {
             content: [{
               type: 'text' as const,
@@ -168,7 +171,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             isError: true,
           };
         }
-        const assessment = await service.analyze(sourceRegion, targetRegion);
+        const assessment = await service.analyze(
+          sourceRegion,
+          targetRegion,
+          radarReport?.items ?? [],
+          radarReport?.accountId
+        );
         return text(assessment);
       }
 
@@ -184,6 +192,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 async function main(): Promise<void> {
   if (graphRepo.init) await graphRepo.init();
+  if (totalInventoryRepo.init) await totalInventoryRepo.init();
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

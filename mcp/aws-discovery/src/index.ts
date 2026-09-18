@@ -6,7 +6,9 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { scanRegion, getResourceById, getResourceDependencies } from '../../../infrastructure/aws/scanner.js';
+import { scanTotalInventory } from '../../../infrastructure/aws/total-inventory-scanner.js';
 import { createInventoryRepository } from '../../../repositories/inventory-repository.factory.js';
+import { createTotalInventoryRepository } from '../../../repositories/total-inventory-repository.factory.js';
 import type { InfrastructureRepository } from '../../../repositories/infrastructure.repository.js';
 import { groupByService } from '../../../domain/resources/inventory.js';
 import { logger } from '../../../infrastructure/aws/logger.js';
@@ -26,6 +28,7 @@ import type { AwsResource } from '../../../domain/resources/resource.js';
 const inventoryDir =
   process.env['INVENTORY_DIR'] ?? process.env['KUZU_INVENTORY_DIR'] ?? process.env['KUZU_DATA_DIR'];
 const repo: InfrastructureRepository = createInventoryRepository();
+const totalInventoryRepo = createTotalInventoryRepository();
 
 // ── Input schemas ─────────────────────────────────────────────────────────────
 
@@ -46,6 +49,10 @@ const ListResourcesInput = z.object({
 const GetDependenciesInput = z.object({
   id: z.string().min(1).describe('Resource ID or ARN'),
   region: z.string().min(1).describe('AWS region'),
+});
+
+const ScanTotalInventoryInput = z.object({
+  region: z.string().min(1).describe('AWS region to scan, e.g. us-east-1'),
 });
 
 // ── MCP Server ────────────────────────────────────────────────────────────────
@@ -104,6 +111,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           region: { type: 'string', description: 'AWS region' },
         },
         required: ['id', 'region'],
+      },
+    },
+    {
+      name: 'scan_total_inventory',
+      description:
+        'Broad account-wide discovery beyond the collector-supported types (AWS Resource Explorer, falling back to the Tagging API), enriched with AWS Config to flag which extra resources can still get a faithful CFN, and classified into CORE/SUPPORTING/NOISE so AWS-managed scaffolding (service-linked roles, default VPC, etc.) does not drown out real workload resources. Call scan_region first so already-collected resources are correctly deduped. READ-ONLY.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          region: { type: 'string', description: 'AWS region, e.g. us-east-1' },
+        },
+        required: ['region'],
       },
     },
   ],
@@ -248,6 +267,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case 'scan_total_inventory': {
+        const { region } = ScanTotalInventoryInput.parse(args);
+        const knownInventory = await repo.getInventory(region);
+        const report = await scanTotalInventory(region, knownInventory);
+        await totalInventoryRepo.saveReport(report);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  region: report.region,
+                  accountId: report.accountId,
+                  discoverySource: report.discoverySource,
+                  summary: report.summary,
+                  errors: report.errors,
+                  // Full per-resource list so the caller can present buckets/fidelity honestly.
+                  items: report.items.map((i) => ({
+                    arn: i.arn,
+                    resourceType: i.resourceType,
+                    source: i.source,
+                    tags: i.tags,
+                    fidelity: i.fidelity,
+                    fidelityReason: i.fidelityReason,
+                    relevance: i.relevance,
+                    relevanceReason: i.relevanceReason,
+                  })),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
       default:
         return {
           content: [{ type: 'text', text: `Unknown tool: ${name}` }],
@@ -269,6 +325,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main(): Promise<void> {
   // Initialise repository (no-op for InMemory, opens Kuzu DB for KuzuRepository)
   if (repo.init) await repo.init();
+  if (totalInventoryRepo.init) await totalInventoryRepo.init();
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
