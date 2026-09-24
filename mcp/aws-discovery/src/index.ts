@@ -12,6 +12,14 @@ import { createTotalInventoryRepository } from '../../../repositories/total-inve
 import type { InfrastructureRepository } from '../../../repositories/infrastructure.repository.js';
 import { groupByService } from '../../../domain/resources/inventory.js';
 import { logger } from '../../../infrastructure/aws/logger.js';
+import {
+  startRun,
+  getCurrentRun,
+  listRuns,
+  useRun,
+  getRunsRoot,
+  type RunMetadata,
+} from '../../../infrastructure/run/run-context.js';
 import type { AwsResource } from '../../../domain/resources/resource.js';
 
 /**
@@ -19,22 +27,45 @@ import type { AwsResource } from '../../../domain/resources/resource.js';
  * (read-only) and persist the raw INVENTORY. It does NOT build the graph and
  * does NOT analyze migration — those are the graph and migration agents' jobs.
  *
- * Inventory store:
- *   INVENTORY_DIR (or legacy KUZU_INVENTORY_DIR / KUZU_DATA_DIR) → JSON file,
- *     shared with the graph agent, which reads the inventory to build the graph
- *     (no re-scan). A plain file: many readers, atomic single-writer, no lock.
- *   unset → in-memory (ephemeral; good for CI / tests).
+ * Artefact store: every execution gets its own folder named after the project
+ * being migrated — `runs/<project>/<runId>/` (see infrastructure/run/run-context.ts).
+ * This server creates the run; the graph, analysis and planner servers follow
+ * the same pointer, so all four processes write into one place.
  */
-const inventoryDir =
-  process.env['INVENTORY_DIR'] ?? process.env['KUZU_INVENTORY_DIR'] ?? process.env['KUZU_DATA_DIR'];
 const repo: InfrastructureRepository = createInventoryRepository();
 const totalInventoryRepo = createTotalInventoryRepository();
+
+/** Every scan must land inside a run folder; create one on the fly if needed. */
+function ensureRun(project: string | undefined, accountId: string, region: string): RunMetadata {
+  const current = getCurrentRun();
+  if (current && (!project || current.project === project)) return current;
+  return startRun({
+    project: project ?? `aws-${accountId || 'unknown'}-${region}`,
+    sourceAccountId: accountId,
+    sourceRegion: region,
+  });
+}
 
 // ── Input schemas ─────────────────────────────────────────────────────────────
 
 const ScanRegionInput = z.object({
   region: z.string().min(1).describe('AWS region to scan, e.g. us-east-1'),
+  project: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Name of the project being migrated — artefacts go to runs/<project>/<runId>/'),
 });
+
+const StartRunInputSchema = z.object({
+  project: z.string().min(1),
+  sourceAccountId: z.string().default(''),
+  sourceRegion: z.string().default(''),
+  targetAccountId: z.string().default(''),
+  targetRegion: z.string().default(''),
+});
+
+const UseRunInput = z.object({ runId: z.string().min(1) });
 
 const GetResourceInput = z.object({
   id: z.string().min(1).describe('Resource ID or ARN'),
@@ -65,13 +96,49 @@ const server = new Server(
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
+      name: 'start_migration_run',
+      description:
+        'Start a new execution for a project. Creates runs/<project>/<timestamp>-<account>-<region>/ and makes it the active run: inventory, graph, CFN templates and the manifest of THIS execution are all written there. Call this before scan_region when you know the project name.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          project: { type: 'string', description: 'Name of the project/workload being migrated' },
+          sourceAccountId: { type: 'string' },
+          sourceRegion: { type: 'string' },
+          targetAccountId: { type: 'string' },
+          targetRegion: { type: 'string' },
+        },
+        required: ['project'],
+      },
+    },
+    {
+      name: 'get_current_run',
+      description: 'Show the active run: project, runId and the folder where every artefact of this execution is saved.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'list_migration_runs',
+      description: 'List past executions (newest first) with their project, runId and folder.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'use_migration_run',
+      description: 'Make a previous run the active one, to resume it or inspect its artefacts.',
+      inputSchema: {
+        type: 'object',
+        properties: { runId: { type: 'string', description: 'runId or absolute run folder' } },
+        required: ['runId'],
+      },
+    },
+    {
       name: 'scan_region',
       description:
-        'Scan an AWS region and return a structured inventory of all supported resources and their relationships. READ-ONLY.',
+        'Scan an AWS region and return a structured inventory of all supported resources and their relationships. Starts a run automatically if none is active. READ-ONLY.',
       inputSchema: {
         type: 'object',
         properties: {
           region: { type: 'string', description: 'AWS region, e.g. us-east-1' },
+          project: { type: 'string', description: 'Project being migrated (names the artefact folder)' },
         },
         required: ['region'],
       },
@@ -133,9 +200,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
+      case 'start_migration_run': {
+        const input = StartRunInputSchema.parse(args);
+        const run = startRun(input);
+        return { content: [{ type: 'text', text: JSON.stringify(run, null, 2) }] };
+      }
+
+      case 'get_current_run': {
+        const run = getCurrentRun();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: run
+                ? JSON.stringify(run, null, 2)
+                : `No active run. Call start_migration_run first. Runs root: ${getRunsRoot()}`,
+            },
+          ],
+        };
+      }
+
+      case 'list_migration_runs': {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ runsRoot: getRunsRoot(), runs: listRuns() }, null, 2) }],
+        };
+      }
+
+      case 'use_migration_run': {
+        const { runId } = UseRunInput.parse(args);
+        return { content: [{ type: 'text', text: JSON.stringify(useRun(runId), null, 2) }] };
+      }
+
       case 'scan_region': {
-        const { region } = ScanRegionInput.parse(args);
+        const { region, project } = ScanRegionInput.parse(args);
         const inventory = await scanRegion(region);
+        const run = ensureRun(project, inventory.accountId, region);
         await repo.saveInventory(inventory);
 
         const grouped = groupByService(inventory.resources);
@@ -151,6 +250,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: 'text',
               text: JSON.stringify(
                 {
+                  run: { project: run.project, runId: run.runId, runDir: run.runDir },
                   region: inventory.region,
                   accountId: inventory.accountId,
                   scannedAt: inventory.scannedAt,
@@ -271,6 +371,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { region } = ScanTotalInventoryInput.parse(args);
         const knownInventory = await repo.getInventory(region);
         const report = await scanTotalInventory(region, knownInventory);
+        ensureRun(undefined, report.accountId, region);
         await totalInventoryRepo.saveReport(report);
 
         return {
@@ -332,7 +433,8 @@ async function main(): Promise<void> {
 
   logger.info('aws-discovery-mcp started', {
     transport: 'stdio',
-    inventoryStore: inventoryDir ? `file:${inventoryDir}` : 'in-memory',
+    runsRoot: getRunsRoot(),
+    activeRun: getCurrentRun()?.runDir ?? 'none (created on first scan)',
   });
 
   // Graceful shutdown

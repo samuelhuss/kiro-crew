@@ -18,6 +18,13 @@ import { InMemoryAssessmentRepository } from '../../../repositories/migration/in
 import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { logger } from '../../../infrastructure/aws/logger.js';
+import {
+  artifactPath,
+  resolveArtifactDir,
+  getCurrentRun,
+  getRunsRoot,
+  updateCurrentRun,
+} from '../../../infrastructure/run/run-context.js';
 import type { MigrationRequirements } from '../../../domain/migration/plan.js';
 import type { MigrationPlan } from '../../../domain/migration/plan.js';
 
@@ -59,7 +66,7 @@ const GeneratePlanInput = z.object({
 });
 
 const ValidateInput = z.object({
-  outputDir: z.string().default('cfn'),
+  outputDir: z.string().optional(),
   awsValidate: z.boolean().default(false),
   region: z.string().optional(),
 });
@@ -108,7 +115,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: {
         type: 'object',
         properties: {
-          outputDir: { type: 'string', description: 'Directory where templates are written (default: cfn/)' },
+          outputDir: { type: 'string', description: 'Directory where templates are written (default: <run>/cfn)' },
           awsValidate: { type: 'boolean', description: 'Also run AWS validate-template API? (needs creds)' },
           region: { type: 'string', description: 'Region for AWS validation' },
         },
@@ -131,7 +138,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           targetAccountId: { type: 'string', description: 'Target account ID (cross-account)' },
           isCrossAccount: { type: 'boolean' },
           scopedResourceIds: { type: 'array', items: { type: 'string' }, description: 'Subset to migrate (empty = all)' },
-          outputPath: { type: 'string', description: 'Where to write the manifest markdown (default docs/migration-manifest.md)' },
+          outputPath: { type: 'string', description: 'Where to write the manifest markdown (default <run>/docs/migration-manifest.md)' },
         },
         required: ['sourceRegion', 'targetRegion'],
       },
@@ -156,7 +163,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             },
           },
           region: { type: 'string', description: 'Region where the resources live' },
-          outputPath: { type: 'string', description: 'Where to write the .yaml (default docs/cfn/faithful.yaml)' },
+          outputPath: { type: 'string', description: 'Where to write the .yaml (default <run>/cfn/faithful.yaml)' },
         },
         required: ['resources'],
       },
@@ -171,7 +178,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           templatePath: { type: 'string', description: 'Path to the faithful .yaml to adapt' },
           targetRegion: { type: 'string' },
           targetAccountId: { type: 'string' },
-          outputPath: { type: 'string', description: 'Where to write the adapted .yaml (default docs/cfn/adapted.yaml)' },
+          outputPath: { type: 'string', description: 'Where to write the adapted .yaml (default <run>/cfn/adapted.yaml)' },
         },
         required: ['templatePath', 'targetRegion'],
       },
@@ -252,7 +259,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const input = ValidateInput.parse(args);
         const templates = generateCfnTemplates(lastPlan);
         const { summary, results, allPassed } = await runFullValidation(templates, {
-          outputDir: input.outputDir,
+          outputDir: resolveArtifactDir('cfn', input.outputDir),
           awsValidate: input.awsValidate,
           region: input.region,
         });
@@ -316,8 +323,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           targetAccountId: z.string().default(''),
           isCrossAccount: z.boolean().default(false),
           scopedResourceIds: z.array(z.string()).default([]),
-          outputPath: z.string().default('docs/migration-manifest.md'),
+          outputPath: z.string().optional(),
         }).parse(args);
+
+        const outputPath = input.outputPath ?? artifactPath('docs', 'migration-manifest.md');
+        updateCurrentRun({
+          sourceRegion: input.sourceRegion,
+          targetRegion: input.targetRegion,
+          targetAccountId: input.targetAccountId,
+        });
 
         const assessment = await migrationService.analyze(input.sourceRegion, input.targetRegion);
         const graph = await graphRepo.getGraph();
@@ -329,11 +343,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
 
         const md = renderManifestMarkdown(lastManifest);
-        await mkdir(dirname(input.outputPath), { recursive: true });
-        await writeFile(input.outputPath, md, 'utf8');
+        await mkdir(dirname(outputPath), { recursive: true });
+        await writeFile(outputPath, md, 'utf8');
 
         return text({
-          manifestPath: input.outputPath,
+          manifestPath: outputPath,
           summary: lastManifest.summary,
           migrationCost: lastManifest.migrationCost,
           orphanCount: lastManifest.orphanCount,
@@ -355,9 +369,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             physicalId: z.string(),
           })).min(1),
           region: z.string().default(REGION),
-          outputPath: z.string().default('docs/cfn/faithful.yaml'),
+          outputPath: z.string().optional(),
         }).parse(args);
 
+        const outputPath = input.outputPath ?? artifactPath('cfn', 'faithful.yaml');
         const resources = input.resources as ResourceToGenerate[];
         const result = await generateFaithfulTemplate(resources, { region: input.region });
 
@@ -372,12 +387,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        await mkdir(dirname(input.outputPath), { recursive: true });
-        await writeFile(input.outputPath, result.templateBody, 'utf8');
+        await mkdir(dirname(outputPath), { recursive: true });
+        await writeFile(outputPath, result.templateBody, 'utf8');
 
         return text({
           status: result.status,
-          templatePath: input.outputPath,
+          templatePath: outputPath,
           templateSizeBytes: result.templateBody.length,
           unresolvedResources: result.unresolvedResources,
           warnings: result.warnings,
@@ -390,9 +405,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           templatePath: z.string(),
           targetRegion: z.string(),
           targetAccountId: z.string().default(''),
-          outputPath: z.string().default('docs/cfn/adapted.yaml'),
+          outputPath: z.string().optional(),
         }).parse(args);
 
+        const outputPath = input.outputPath ?? artifactPath('cfn', 'adapted.yaml');
         const { readFile } = await import('node:fs/promises');
         const templateBody = await readFile(input.templatePath, 'utf8');
         const adapted = adaptForTarget(templateBody, {
@@ -400,11 +416,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           targetAccountId: input.targetAccountId,
         });
 
-        await mkdir(dirname(input.outputPath), { recursive: true });
-        await writeFile(input.outputPath, adapted.yaml, 'utf8');
+        await mkdir(dirname(outputPath), { recursive: true });
+        await writeFile(outputPath, adapted.yaml, 'utf8');
 
         return text({
-          adaptedPath: input.outputPath,
+          adaptedPath: outputPath,
           requiredParameters: adapted.requiredParameters,
           removedAttributes: adapted.removedAttributes,
           note: 'Supply the required parameters at deploy time: wire TargetVpcId/TargetSubnetId/TargetSecurityGroupId from the networking stack, TargetImageId/TargetSnapshotId from the copied AMI/snapshot.',
@@ -425,8 +441,11 @@ async function main(): Promise<void> {
   if (graphRepo.init) await graphRepo.init();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  logger.info('migration-planner-mcp started', { transport: 'stdio' });
-
+  logger.info('migration-planner-mcp started', {
+    transport: 'stdio',
+    runsRoot: getRunsRoot(),
+    activeRun: getCurrentRun()?.runDir ?? 'none (start one via discovery start_migration_run)',
+  });
   const shutdown = async (): Promise<void> => {
     logger.info('migration-planner-mcp shutting down');
     if (graphRepo.close) await graphRepo.close();

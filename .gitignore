@@ -6,7 +6,10 @@ dist/
 # Dependencies
 node_modules/
 
-# Generated data (inventory scans, graph state — contains account IDs)
+# Per-execution artifacts: runs/<project>/<runId>/ (inventory, graph, cfn, manifest)
+runs/
+
+# Legacy generated data (inventory scans, graph state — contains account IDs)
 data/inventory/
 data/graph/
 
@@ -20,6 +23,8 @@ docs/migration-manifest.md
 # Environment
 .env
 .env.*
+!.env.example
+.aws/
 
 # Logs
 *.log
@@ -31,6 +36,8 @@ Thumbs.db
 
 # IDE
 .idea/
-.vscode/
+.vscode/*
+!.vscode/mcp.json
 *.swp
 docs/migration-manifest-*.md
+.kiro/settings/mcp.json

@@ -4,12 +4,11 @@ import { FileTotalInventoryRepository } from './file-total-inventory.repository.
 
 /**
  * Select the total-inventory repository implementation for the running MCP
- * server. When TOTAL_INVENTORY_DIR is configured, aws-discovery-mcp (writer)
- * and migration-analysis-mcp (reader) share ONE JSON file — same sharing
- * pattern as INVENTORY_DIR/GRAPH_DIR. When unset, an isolated in-memory store
- * is used (tests / ephemeral runs).
+ * server. Defaults to the shared JSON file inside the active run folder, so
+ * aws-discovery-mcp (writer) and migration-analysis-mcp (reader) see the same
+ * data. Set MIGRATION_STORE=memory for an isolated ephemeral store.
  */
 export function createTotalInventoryRepository(): TotalInventoryRepository {
-  const dir = process.env['TOTAL_INVENTORY_DIR'];
-  return dir ? new FileTotalInventoryRepository(dir) : new InMemoryTotalInventoryRepository();
+  if (process.env['MIGRATION_STORE'] === 'memory') return new InMemoryTotalInventoryRepository();
+  return new FileTotalInventoryRepository();
 }

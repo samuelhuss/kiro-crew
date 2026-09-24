@@ -64,6 +64,21 @@ describe('Migration Rules', () => {
     expect(r.blockers.some((b) => b.blocker === 'KMS_KEY_UNAVAILABLE')).toBe(true);
   });
 
+  it('Outposts (forward-looking) → NO_ACTION / CRITICAL with target placement blocker', () => {
+    const r = evaluateRule(ctx(node('op-1', 'AWS::Outposts::Outpost' as ResourceType)));
+    expect(r.strategy).toBe('NO_ACTION');
+    expect(r.status).toBe('REQUIRES_MANUAL_ACTION');
+    expect(r.baseRisk).toBe('CRITICAL');
+    expect(r.blockers.some((b) => b.blocker === 'OUTPOSTS_MANUAL_PLACEMENT_REQUIRED')).toBe(true);
+  });
+
+  it('Local Gateway route tables (forward-looking) require manual network mapping', () => {
+    const r = evaluateRule(ctx(node('lgw-rtb-1', 'AWS::EC2::LocalGatewayRouteTable' as ResourceType)));
+    expect(r.strategy).toBe('MANUAL');
+    expect(r.status).toBe('REQUIRES_MANUAL_ACTION');
+    expect(r.blockers.some((b) => b.blocker === 'LOCAL_GATEWAY_NETWORK_MAPPING_REQUIRED')).toBe(true);
+  });
+
   it('unknown type → NOT_SUPPORTED strategy / UNKNOWN status (never guesses)', () => {
     const r = evaluateRule(ctx(node('x-1', 'AWS::Foo::Bar' as ResourceType)));
     expect(r.strategy).toBe('NOT_SUPPORTED');

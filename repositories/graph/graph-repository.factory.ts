@@ -5,12 +5,11 @@ import { FileGraphRepository } from './file-graph.repository.js';
 /**
  * Select the graph repository implementation for the running MCP server.
  *
- * When a graph directory is configured (GRAPH_DIR, or the legacy KUZU_GRAPH_DIR
- * / KUZU_DATA_DIR names kept for config compatibility), all MCP servers share
- * ONE JSON file — a graph written by any agent is immediately visible to the
- * others, with no re-scan and, crucially, no exclusive database lock: many
- * readers plus an atomic single-writer. When unset, each server uses an
- * isolated in-memory graph (good for tests / ephemeral runs).
+ * Defaults to the shared JSON file inside the active run folder (see
+ * infrastructure/run/run-context.ts), so a graph written by any agent is
+ * immediately visible to the others, with no re-scan and, crucially, no
+ * exclusive database lock: many readers plus an atomic single-writer. Set
+ * MIGRATION_STORE=memory for an isolated in-memory graph (tests / CI).
  *
  * Why not Kuzu: the embedded store locks its directory exclusively for the life
  * of the holding process, so two pipeline servers pointing at the same dir
@@ -18,9 +17,6 @@ import { FileGraphRepository } from './file-graph.repository.js';
  * addon under sustained cycling. A JSON file avoids both failure modes.
  */
 export function createGraphRepository(): InfrastructureGraphRepository {
-  const dir =
-    process.env['GRAPH_DIR'] ??
-    process.env['KUZU_GRAPH_DIR'] ??
-    process.env['KUZU_DATA_DIR'];
-  return dir ? new FileGraphRepository(dir) : new InMemoryGraphRepository();
+  if (process.env['MIGRATION_STORE'] === 'memory') return new InMemoryGraphRepository();
+  return new FileGraphRepository();
 }

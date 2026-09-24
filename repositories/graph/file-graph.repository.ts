@@ -11,6 +11,7 @@ import type {
   ImpactResult,
 } from './graph.repository.js';
 import { InMemoryGraphRepository } from './in-memory-graph.repository.js';
+import { resolveArtifactDir } from '../../infrastructure/run/run-context.js';
 
 /**
  * File-backed InfrastructureGraphRepository — the SHARED graph store.
@@ -28,18 +29,17 @@ import { InMemoryGraphRepository } from './in-memory-graph.repository.js';
  * persists the whole graph back to disk atomically (temp file + rename).
  */
 export class FileGraphRepository implements InfrastructureGraphRepository {
-  private readonly filePath: string;
+  private readonly dirOverride: string | undefined;
   private mem = new InMemoryGraphRepository();
   private hydrated = false;
 
   constructor(dir?: string) {
-    const baseDir =
-      dir ??
-      process.env['GRAPH_DIR'] ??
-      process.env['KUZU_GRAPH_DIR'] ??
-      process.env['KUZU_DATA_DIR'] ??
-      join(process.cwd(), 'data');
-    this.filePath = /\.json$/i.test(baseDir) ? baseDir : join(baseDir, 'graph.json');
+    this.dirOverride = dir;
+  }
+
+  private get filePath(): string {
+    const baseDir = resolveArtifactDir('graph', this.dirOverride);
+    return /\.json$/i.test(baseDir) ? baseDir : join(baseDir, 'graph.json');
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────

@@ -23,11 +23,12 @@ An AWS infrastructure **migration platform** driven by Kiro Crew agents: it disc
            │         │          │          │      (uvx)    (uvx)
            ▼         ▼          ▼          ▼        └─ AWS Pricing + AWS CLI (call_aws)
        AWS APIs  inventory.json ←→ graph.json   IaC Generator + cfn-lint
-      (read-only)  (shared JSON file store, lock-free)
+      (read-only)   runs/<projeto>/<runId>/  (shared JSON file store, lock-free)
 ```
 
 - **The console is the visual face of the orchestrator, NOT a reimplementation.** It relays the user's message to the agent over ACP (`kiro-cli acp`) and streams the agent's narration + tool calls back via SSE. All migration logic lives in the orchestrator + its 6 MCP servers.
-- **6 MCP servers:** 4 custom Node servers (discovery, infrastructure-graph, migration-analysis, migration-planner) run from `dist/`; 2 AWS Labs servers via `uvx` (aws-pricing, aws-api). All AWS commands the orchestrator runs go through `@aws-api-mcp/call_aws` (there is no `aws` CLI binary on this host).
+- **6 MCP servers:** 4 custom Node servers (discovery, infrastructure-graph, migration-analysis, migration-planner) run from `dist/`; 2 AWS Labs servers via `uvx` (aws-pricing, aws-api). All AWS commands the orchestrator runs go through `call_aws` on the aws-api MCP, so credentials and region are resolved in one place.
+- **Artefatos por execução:** cada run escreve em `runs/<projeto>/<timestamp>-<conta>-<região>/`. Os 4 servers Node são processos separados e compartilham a pasta ativa por um ponteiro em `runs/current-run.json`.
 
 ## The orchestrator pipeline
 
@@ -63,64 +64,122 @@ Values arrive from the user over HTTP; the response is masked (`key …XXXX`), n
 
 network (VPC, Subnet, RouteTable, IGW, NAT, SecurityGroup), ec2, ebs, eip, ecs (Cluster+Service), elb (ALB/NLB+TargetGroup), rds (Instance+Cluster), s3, lambda, iam, secrets, cloudwatch logs, route53, dynamodb, ecr, sqs, sns, elasticache, cloudfront. Every type has a **deterministic** migration rule (RECREATE / SNAPSHOT_RESTORE / REPLICATE / NO_ACTION / MANUAL) with a fixed risk level — no LLM chooses strategies. Types without a collector are still surfaced by the radar step and flagged RADAR-ONLY.
 
-## Quick Start
+## Quick Start (Onboarding)
+
+Para configurar sua máquina e os agentes (Kiro/VS Code), siga **exatamente** estes três passos:
+
+**1. Clone e Prepare o Ambiente:**
+Não rode `npm install`. O script de bootstrap cuidará de tudo (instalação, compilação e configuração do Kiro).
 
 ```bash
-cd /home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp
-export PATH="/home/kirocrew/.local/nodejs/bin:$PATH"
-npm install
-npm run build
+git clone <repo> && cd migration-mcp-server
+npm run bootstrap
 ```
 
-### Run the console (visual)
+**2. Configure as Credenciais AWS:**
+Use o assistente iterativo para preencher as contas de origem e destino no seu arquivo `.env`:
 
 ```bash
-PORT=8090 HOST=0.0.0.0 ORCHESTRATOR_CWD=/home/kirocrew/.kiro/crew/workspace node dist/api/main.js
+npm run env:configure
 ```
 
-The console runs inside the Kiro Crew container. To reach it from your machine, publish the port with a socat sidecar on the Docker host (the container IP can change on restart — check with `hostname -I` or use the container name):
+**3. Inicie os Agentes:**
+Abra seu Kiro (ou a aba do Copilot no VS Code). Os agentes e os servidores MCP já estarão conectados e prontos para uso.
+
+👉 **Tem dúvidas ou deu erro?** Leia o [Guia Completo de Onboarding da Equipe](docs/TEAM_SETUP.md) para pré-requisitos exatos, troubleshooting e a explicação profunda das credenciais.
+
+Para onboarding de equipe, incluindo Windows/Linux/macOS, fluxo manual, credenciais AWS e envio
+para o Git, veja [docs/TEAM_SETUP.md](docs/TEAM_SETUP.md).
+
+Atalhos úteis:
 
 ```bash
-docker rm -f kiro-console-proxy 2>/dev/null
-docker run -d --name kiro-console-proxy -p 127.0.0.1:8080:8080 --network bridge \
-  alpine/socat tcp-listen:8080,fork,reuseaddr tcp-connect:<container-name-or-ip>:8090
-# then open http://localhost:8080
+npm run bootstrap -- --dry-run   # valida sem instalar/escrever agentes
+npm run doctor                   # checa pré-requisitos
+npm run env:configure            # configura/troca source e target no .env local
+npm run env:check                # verifica se .env tem origem configurada
+npm run setup                    # legado: npm ci && npm run build
+```
+
+### Usar direto na IDE (recomendado — sem console)
+
+`.vscode/mcp.json` e `.cursor/mcp.json` já vêm configurados com `${workspaceFolder}` e
+carregam o `.env` local antes de iniciar os MCP servers. Abra o chat em Agent mode, escolha o agente
+**aws-migration-orchestrator** e peça, por exemplo:
+`Migre o workload tstsrv de us-east-1 para sa-east-1`. Guia completo: [docs/IDE_SETUP.md](docs/IDE_SETUP.md).
+
+### Usar no Kiro (agents/*/agent.json)
+
+Os `agent.json` do repo usam o placeholder `{{PROJECT_ROOT}}`. O instalador faz a configuração completa para o Kiro:
+1. Copia os agentes para `~/.kiro/agents` resolvendo o caminho absoluto.
+2. Cria e preenche o `.kiro/settings/mcp.json` para configurar os servidores MCP automaticamente.
+3. Cria a pasta `runs/` (necessária para os MCPs iniciarem).
+
+```bash
+npm run agents:install              # ou: npm run agents:install -- --out <dir> / --dry-run
+```
+
+### Onde ficam os artefatos gerados
+
+Cada execução cria a sua própria pasta, nomeada pelo projeto que está sendo migrado:
+
+```
+runs/<projeto>/<timestamp>-<contaOrigem>-<região>/
+├── run.json                    # metadados da execução
+├── inventory/inventory.json    # discovery
+├── inventory/total-inventory.json
+├── graph/graph.json            # grafo de dependências
+├── cfn/faithful.yaml           # CFN fiel + cfn/adapted.yaml (adaptado ao destino)
+└── docs/migration-manifest.md  # plano legível
+```
+
+Peça `start_migration_run(project)` antes do primeiro scan para nomear a pasta (se não, ela é
+criada automaticamente como `aws-<conta>-<região>`). Use `get_current_run` para ver o caminho,
+`list_migration_runs` / `use_migration_run` para voltar a uma execução anterior. A raiz é
+configurável por `MIGRATION_RUNS_DIR` (default `<repo>/runs`, ignorado pelo git).
+
+### Run the console (visual, opcional)
+
+```bash
+PORT=8090 HOST=127.0.0.1 node dist/api/main.js
+# ou, para expor na rede: HOST=0.0.0.0
 ```
 
 Steps in the UI: **1 Credenciais** → **2 Migração** → **3 Execução** (live chat with the orchestrator, a floating tool drawer, and a pipeline header showing source→target accounts).
 
-### Or drive the orchestrator directly
-
-Open a chat with `aws-migration-orchestrator` in the dashboard and ask, e.g.: `Migre o workload tstsrv de us-east-1 para sa-east-1`.
-
 ### Tests
 
 ```bash
-npm test                  # unit suite (128 tests)
+npm test                  # unit suite
 npm run test:integration  # real AWS scan (requires credentials)
 ```
 
 ## Project structure
 
 ```
-aws-migration-mvp/
-├── agents/aws-migration-orchestrator/agent.json   # versioned orchestrator prompt (sync w/ ~/.kiro live)
+migration-agent/
+├── .vscode/mcp.json .cursor/mcp.json              # config MCP por IDE (usa ${workspaceFolder})
+├── .github/agents/*.agent.md                      # persona do orquestrador no VS Code
+├── agents/aws-migration-orchestrator/agent.json   # mesma persona no formato Kiro ({{PROJECT_ROOT}})
+├── scripts/install-agents.mjs                     # resolve {{PROJECT_ROOT}} e instala em ~/.kiro/agents
 ├── api/
-│   ├── main.ts / server.ts        # HTTP server (binds 127.0.0.1 by default; 0.0.0.0 behind socat)
+│   ├── main.ts / server.ts        # HTTP server (binds 127.0.0.1 by default)
 │   ├── acp-bridge.ts              # spawns kiro-cli acp, relays session/update + tool I/O over SSE
 │   └── creds.ts                   # POST /api/creds: writes MCP env + AWS profiles (source/target)
 ├── public/                        # console — index.html + app.js (Claro identity, tool drawer, pipeline)
 ├── mcp/
-│   ├── aws-discovery/             # discovery MCP (19 collectors)
+│   ├── aws-discovery/             # discovery MCP (19 collectors) + tools de run
 │   ├── graph-agent/               # graph MCP (query/traversal tools)
 │   ├── migration-agent/           # migration-analysis MCP
 │   └── planner-agent/             # migration-planner MCP (manifest, faithful CFN, validate, adapt)
 ├── domain/
 │   ├── resources/ relationships/ graph/
 │   └── migration/                 # rules, analyzer, planner, iac-generator, data-migration, manifest, validator
-├── infrastructure/aws/            # SDK clients, scanner, collectors, logger
+├── infrastructure/
+│   ├── aws/                       # SDK clients, scanner, collectors, logger
+│   └── run/run-context.ts         # pasta por execução: runs/<projeto>/<runId>/
 ├── repositories/                  # File-backed inventory + graph stores (atomic, lock-free)
-└── tests/unit/                    # 128 tests
+└── runs/                          # artefatos gerados (git-ignored)
 ```
 
 ## migration-planner MCP tools

@@ -1,7 +1,15 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import {
+  CloudFormationClient,
+  ValidateTemplateCommand,
+  CreateChangeSetCommand,
+  DescribeChangeSetCommand,
+  DeleteChangeSetCommand,
+} from '@aws-sdk/client-cloudformation';
+import { resolveArtifactDir } from '../../infrastructure/run/run-context.js';
 import type { GeneratedTemplate } from './cfn-generator.js';
 
 const exec = promisify(execFile);
@@ -64,14 +72,15 @@ export interface ChangeSetChange {
  */
 export async function validateTemplates(
   templates: GeneratedTemplate[],
-  outputDir: string = 'cfn'
+  outputDir?: string
 ): Promise<ValidationResult[]> {
+  const targetDir = resolveArtifactDir('cfn', outputDir);
   // Write templates to disk
-  await mkdir(outputDir, { recursive: true });
+  await mkdir(targetDir, { recursive: true });
   const results: ValidationResult[] = [];
 
   for (const template of templates) {
-    const filePath = join(outputDir, template.templatePath.replace('cfn/', ''));
+    const filePath = join(targetDir, template.templatePath.replace('cfn/', ''));
     await mkdir(dirname(filePath), { recursive: true });
     await writeFile(filePath, template.yaml, 'utf8');
 
@@ -92,11 +101,12 @@ export async function validateTemplates(
 
 /**
  * Run cfn-lint on a single template file.
+ * Resolved from CFN_LINT_PATH, otherwise from PATH.
  * Returns structured findings.
  */
 async function runCfnLint(templatePath: string): Promise<LintFinding[]> {
   try {
-    const cfnLintPath = '/home/kirocrew/.local/bin/cfn-lint';
+    const cfnLintPath = process.env['CFN_LINT_PATH'] ?? 'cfn-lint';
     const { stdout } = await exec(cfnLintPath, [
       templatePath,
       '--format', 'json',
@@ -121,7 +131,7 @@ async function runCfnLint(templatePath: string): Promise<LintFinding[]> {
     }));
   } catch (err: unknown) {
     // cfn-lint exits non-zero when it finds errors — parse stderr/stdout
-    const error = err as { stdout?: string; stderr?: string; code?: number };
+    const error = err as { stdout?: string; stderr?: string; code?: number | string };
 
     if (error.stdout) {
       try {
@@ -146,7 +156,10 @@ async function runCfnLint(templatePath: string): Promise<LintFinding[]> {
     return [{
       level: 'error',
       rule: 'LINT_EXECUTION_FAILED',
-      message: error.stderr || String(err),
+      message:
+        error.code === 'ENOENT' || /ENOENT/.test(String(error.stderr ?? ''))
+          ? 'cfn-lint not found. Install it (`pip install cfn-lint`) or set CFN_LINT_PATH to its full path.'
+          : error.stderr || String(err),
       location: templatePath,
     }];
   }
@@ -160,30 +173,15 @@ export async function validateWithAws(
   templatePath: string,
   region: string
 ): Promise<AwsValidationResult> {
-  // This uses the aws-api-mcp or direct AWS CLI — we'll shell out to node
-  // since the project uses AWS SDK
   try {
-    const { stdout } = await exec('node', [
-      '-e',
-      `
-      const { CloudFormationClient, ValidateTemplateCommand } = require('@aws-sdk/client-cloudformation');
-      const fs = require('fs');
-      const client = new CloudFormationClient({ region: '${region}' });
-      const body = fs.readFileSync('${templatePath}', 'utf8');
-      client.send(new ValidateTemplateCommand({ TemplateBody: body }))
-        .then(r => console.log(JSON.stringify({
-          valid: true,
-          parameters: (r.Parameters || []).map(p => p.ParameterKey),
-          capabilities: r.Capabilities || []
-        })))
-        .catch(e => console.log(JSON.stringify({ valid: false, error: e.message, parameters: [], capabilities: [] })));
-      `,
-    ], {
-      timeout: 30_000,
-      cwd: '/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp',
-    });
-
-    return JSON.parse(stdout.trim());
+    const client = new CloudFormationClient({ region });
+    const body = await readFile(templatePath, 'utf8');
+    const result = await client.send(new ValidateTemplateCommand({ TemplateBody: body }));
+    return {
+      valid: true,
+      parameters: (result.Parameters ?? []).map((p) => p.ParameterKey ?? ''),
+      capabilities: result.Capabilities ?? [],
+    };
   } catch (err) {
     return {
       valid: false,
@@ -206,71 +204,48 @@ export async function createDryRunChangeset(
   parameters: Record<string, string> = {}
 ): Promise<ChangeSetResult> {
   const changeSetName = `dryrun-${Date.now()}`;
+  const client = new CloudFormationClient({ region });
 
   try {
-    const paramsStr = Object.entries(parameters)
-      .map(([k, v]) => `{ParameterKey:'${k}',ParameterValue:'${v}'}`)
-      .join(',');
+    const body = await readFile(templatePath, 'utf8');
 
-    const { stdout } = await exec('node', [
-      '-e',
-      `
-      const { CloudFormationClient, CreateChangeSetCommand, DescribeChangeSetCommand, DeleteChangeSetCommand } = require('@aws-sdk/client-cloudformation');
-      const fs = require('fs');
-      const client = new CloudFormationClient({ region: '${region}' });
-      const body = fs.readFileSync('${templatePath}', 'utf8');
+    await client.send(new CreateChangeSetCommand({
+      StackName: stackName,
+      ChangeSetName: changeSetName,
+      ChangeSetType: 'CREATE',
+      TemplateBody: body,
+      Capabilities: ['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM'],
+      Parameters: Object.entries(parameters).map(([ParameterKey, ParameterValue]) => ({
+        ParameterKey,
+        ParameterValue,
+      })),
+    }));
 
-      async function run() {
-        // Create changeset (no execute)
-        const cs = await client.send(new CreateChangeSetCommand({
-          StackName: '${stackName}',
-          ChangeSetName: '${changeSetName}',
-          ChangeSetType: 'CREATE',
-          TemplateBody: body,
-          Capabilities: ['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM'],
-          Parameters: [${paramsStr}],
-        }));
+    // Give CloudFormation a moment to compute the change set
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
 
-        // Wait briefly for it to compute
-        await new Promise(r => setTimeout(r, 5000));
+    const desc = await client.send(new DescribeChangeSetCommand({
+      StackName: stackName,
+      ChangeSetName: changeSetName,
+    }));
 
-        // Describe to get changes
-        const desc = await client.send(new DescribeChangeSetCommand({
-          StackName: '${stackName}',
-          ChangeSetName: '${changeSetName}',
-        }));
-
-        // Clean up (delete the changeset, never execute)
-        await client.send(new DeleteChangeSetCommand({
-          StackName: '${stackName}',
-          ChangeSetName: '${changeSetName}',
-        })).catch(() => {});
-
-        console.log(JSON.stringify({
-          changeSetId: desc.ChangeSetId || '',
-          status: desc.Status || 'UNKNOWN',
-          changes: (desc.Changes || []).map(c => ({
-            action: c.ResourceChange?.Action || 'Add',
-            logicalId: c.ResourceChange?.LogicalResourceId || '',
-            resourceType: c.ResourceChange?.ResourceType || '',
-            replacement: c.ResourceChange?.Replacement,
-          })),
-        }));
-      }
-      run().catch(e => console.log(JSON.stringify({ changeSetId: '', status: 'FAILED', changes: [], error: e.message })));
-      `,
-    ], {
-      timeout: 60_000,
-      cwd: '/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp',
-    });
-
-    return JSON.parse(stdout.trim());
-  } catch (err) {
     return {
-      changeSetId: '',
-      status: 'FAILED',
-      changes: [],
+      changeSetId: desc.ChangeSetId ?? '',
+      status: desc.Status ?? 'UNKNOWN',
+      changes: (desc.Changes ?? []).map((c) => ({
+        action: (c.ResourceChange?.Action ?? 'Add') as ChangeSetChange['action'],
+        logicalId: c.ResourceChange?.LogicalResourceId ?? '',
+        resourceType: c.ResourceChange?.ResourceType ?? '',
+        replacement: c.ResourceChange?.Replacement as ChangeSetChange['replacement'],
+      })),
     };
+  } catch {
+    return { changeSetId: '', status: 'FAILED', changes: [] };
+  } finally {
+    // Never execute — always clean up the change set
+    await client
+      .send(new DeleteChangeSetCommand({ StackName: stackName, ChangeSetName: changeSetName }))
+      .catch(() => undefined);
   }
 }
 
@@ -291,7 +266,7 @@ export async function runFullValidation(
   results: ValidationResult[];
   allPassed: boolean;
 }> {
-  const outputDir = options.outputDir ?? 'cfn';
+  const outputDir = resolveArtifactDir('cfn', options.outputDir);
 
   // Step 1: Write + cfn-lint
   const results = await validateTemplates(templates, outputDir);

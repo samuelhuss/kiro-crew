@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { TotalInventoryReport } from '../domain/resources/total-inventory.js';
 import type { TotalInventoryRepository } from './total-inventory.repository.js';
+import { resolveArtifactDir } from '../infrastructure/run/run-context.js';
 
 /**
  * File-backed TotalInventoryRepository — same atomic temp-file+rename pattern
@@ -10,11 +11,15 @@ import type { TotalInventoryRepository } from './total-inventory.repository.js';
  * `<dir>/total-inventory.json` holding a map of region → TotalInventoryReport.
  */
 export class FileTotalInventoryRepository implements TotalInventoryRepository {
-  private readonly filePath: string;
+  private readonly dirOverride: string | undefined;
 
   constructor(dir?: string) {
-    const baseDir = dir ?? process.env['TOTAL_INVENTORY_DIR'] ?? join(process.cwd(), 'data');
-    this.filePath = /\.json$/i.test(baseDir) ? baseDir : join(baseDir, 'total-inventory.json');
+    this.dirOverride = dir;
+  }
+
+  private get filePath(): string {
+    const baseDir = resolveArtifactDir('inventory', this.dirOverride ?? process.env['TOTAL_INVENTORY_DIR']);
+    return /\.json$/i.test(baseDir) ? baseDir : join(baseDir, 'total-inventory.json');
   }
 
   async init(): Promise<void> {

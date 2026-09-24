@@ -4,6 +4,7 @@ import type { AwsResource } from '../domain/resources/resource.js';
 import type { ResourceRelationship } from '../domain/relationships/relationship.js';
 import type { RegionInventory } from '../domain/resources/inventory.js';
 import type { InfrastructureRepository } from './infrastructure.repository.js';
+import { resolveArtifactDir } from '../infrastructure/run/run-context.js';
 
 /**
  * File-backed InfrastructureRepository — the SHARED inventory store.
@@ -20,18 +21,16 @@ import type { InfrastructureRepository } from './infrastructure.repository.js';
  * region → RegionInventory. Writes are atomic (temp file + rename).
  */
 export class FileInfrastructureRepository implements InfrastructureRepository {
-  private readonly filePath: string;
+  private readonly dirOverride: string | undefined;
 
   constructor(dir?: string) {
-    const baseDir =
-      dir ??
-      process.env['INVENTORY_DIR'] ??
-      process.env['KUZU_INVENTORY_DIR'] ??
-      process.env['KUZU_DATA_DIR'] ??
-      join(process.cwd(), 'data');
-    // If the configured path looks like a Kuzu DB dir/file, store the JSON
-    // alongside it under a stable, unambiguous name.
-    this.filePath = /\.json$/i.test(baseDir) ? baseDir : join(baseDir, 'inventory.json');
+    this.dirOverride = dir;
+  }
+
+  /** Resolved per call so a run started after boot is picked up immediately. */
+  private get filePath(): string {
+    const baseDir = resolveArtifactDir('inventory', this.dirOverride);
+    return /\.json$/i.test(baseDir) ? baseDir : join(baseDir, 'inventory.json');
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────

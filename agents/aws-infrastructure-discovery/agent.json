@@ -15,14 +15,16 @@
   ],
   "mcpServers": {
     "aws-discovery-mcp": {
-      "command": "/home/kirocrew/.local/nodejs/bin/node",
+      "command": "node",
       "args": [
-        "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/dist/mcp/aws-discovery/src/index.js"
+        "{{PROJECT_ROOT}}/scripts/run-with-env.mjs",
+        "node",
+        "{{PROJECT_ROOT}}/dist/mcp/aws-discovery/src/index.js"
       ],
       "env": {
         "LOG_LEVEL": "info",
-        "INVENTORY_DIR": "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/data/inventory",
-        "TOTAL_INVENTORY_DIR": "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/data/inventory",
+        "MIGRATION_PROJECT_ROOT": "{{PROJECT_ROOT}}",
+        "MIGRATION_RUNS_DIR": "{{PROJECT_ROOT}}/runs",
         "AWS_REGION": "us-east-1",
         "AWS_ACCESS_KEY_ID": "",
         "AWS_SECRET_ACCESS_KEY": "",

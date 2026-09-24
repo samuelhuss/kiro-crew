@@ -440,6 +440,98 @@ const FORWARD_LOOKING_RULES: Record<string, MigrationRule['evaluate']> = {
       reasoning: 'SSM Parameter Store values are recreated directly from their source value.',
       warnings: ['SecureString parameters need the KMS key available in the target region.'],
     }),
+
+  'AWS::Outposts::Outpost': () =>
+    result({
+      strategy: 'NO_ACTION',
+      status: 'REQUIRES_MANUAL_ACTION',
+      baseRisk: 'CRITICAL',
+      reasoning:
+        'An Outpost is pre-existing physical/hybrid target placement infrastructure, not a source resource to migrate. Workloads may be migrated onto an existing/shared target Outpost only after access, subnets, capacity, and Local Gateway routing are validated.',
+      riskReasons: ['Target Outpost access must be verified', 'Physical capacity and site dependencies', 'Local network and latency constraints'],
+      warnings: ['Do not attempt to create or migrate the Outpost itself as part of workload migration.'],
+      manualActions: [
+        'Confirm the target account can use the shared Outpost and identify the target Outpost ARN, parent region, subnets, capacity, and Local Gateway route tables.',
+        'Map each source subnet/workload tier to an explicit target Outpost subnet or regional fallback before planning execution.',
+      ],
+      blockers: [
+        {
+          blocker: 'OUTPOSTS_MANUAL_PLACEMENT_REQUIRED',
+          severity: 'CRITICAL',
+          description: 'Target Outposts placement, capacity, subnet mapping, and hybrid networking must be validated before workload execution.',
+        },
+      ],
+    }),
+
+  'AWS::Outposts::Site': () =>
+    result({
+      strategy: 'NO_ACTION',
+      status: 'REQUIRES_MANUAL_ACTION',
+      baseRisk: 'CRITICAL',
+      reasoning:
+        'An Outposts site represents physical location metadata. It is not migrated automatically; target site readiness must be verified manually.',
+      riskReasons: ['Physical location dependency', 'Operational readiness outside CloudFormation migration scope'],
+      manualActions: ['Verify the target site, Outpost capacity, networking, power/cooling, and support model before migrating workloads.'],
+      blockers: [
+        {
+          blocker: 'OUTPOSTS_SITE_READINESS_REQUIRED',
+          severity: 'CRITICAL',
+          description: 'Target Outposts site readiness must be confirmed outside the automated migration workflow.',
+        },
+      ],
+    }),
+
+  'AWS::EC2::LocalGatewayRouteTable': () =>
+    result({
+      strategy: 'MANUAL',
+      status: 'REQUIRES_MANUAL_ACTION',
+      baseRisk: 'CRITICAL',
+      reasoning:
+        'Local Gateway route tables are tied to Outposts local networking. They require manual mapping to the target Outpost/site network design.',
+      riskReasons: ['On-premises routing dependency', 'Local gateway mapping changes', 'Potential IP overlap/routing interruption'],
+      manualActions: ['Map source local gateway route tables, VPC associations, and on-prem routes to the target Outpost/local gateway design.'],
+      blockers: [
+        {
+          blocker: 'LOCAL_GATEWAY_NETWORK_MAPPING_REQUIRED',
+          severity: 'CRITICAL',
+          description: 'Local Gateway routing must be redesigned or explicitly mapped for the target environment.',
+        },
+      ],
+    }),
+
+  'AWS::EC2::LocalGatewayRoute': () =>
+    result({
+      strategy: 'MANUAL',
+      status: 'REQUIRES_MANUAL_ACTION',
+      baseRisk: 'CRITICAL',
+      reasoning: 'Local Gateway routes depend on the target Outpost local gateway and on-premises routing topology.',
+      riskReasons: ['On-premises route dependency', 'Cutover risk for hybrid connectivity'],
+      manualActions: ['Validate each local gateway route against the target local gateway, VLAN/VIF group, and on-prem route propagation plan.'],
+      blockers: [
+        {
+          blocker: 'LOCAL_GATEWAY_NETWORK_MAPPING_REQUIRED',
+          severity: 'CRITICAL',
+          description: 'Local Gateway routes cannot be safely recreated without a target hybrid network mapping.',
+        },
+      ],
+    }),
+
+  'AWS::EC2::LocalGatewayRouteTableVPCAssociation': () =>
+    result({
+      strategy: 'MANUAL',
+      status: 'REQUIRES_MANUAL_ACTION',
+      baseRisk: 'CRITICAL',
+      reasoning: 'The VPC association to a Local Gateway route table is specific to the Outpost/local gateway and target VPC design.',
+      riskReasons: ['Target VPC/local gateway association must be planned manually'],
+      manualActions: ['Create an explicit target VPC to Local Gateway route table association plan before execution.'],
+      blockers: [
+        {
+          blocker: 'LOCAL_GATEWAY_NETWORK_MAPPING_REQUIRED',
+          severity: 'CRITICAL',
+          description: 'The target VPC association cannot be inferred from source inventory alone.',
+        },
+      ],
+    }),
 };
 
 /**

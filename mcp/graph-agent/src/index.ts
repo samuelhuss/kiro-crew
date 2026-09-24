@@ -11,6 +11,7 @@ import type { InfrastructureGraphRepository } from '../../../repositories/graph/
 import { createInventoryRepository } from '../../../repositories/inventory-repository.factory.js';
 import type { InfrastructureRepository } from '../../../repositories/infrastructure.repository.js';
 import { logger } from '../../../infrastructure/aws/logger.js';
+import { getCurrentRun, getRunsRoot } from '../../../infrastructure/run/run-context.js';
 import type { GraphNode } from '../../../domain/graph/node.js';
 
 /** Group graph nodes by their CloudFormation service prefix (e.g. 'ECS'). */
@@ -36,8 +37,6 @@ function groupNodesByService(nodes: GraphNode[]): Array<{ service: string; count
 const repo: InfrastructureGraphRepository = createGraphRepository();
 
 /** Inventory store — SHARED with the discovery agent (read-only here). */
-const inventoryDir =
-  process.env['INVENTORY_DIR'] ?? process.env['KUZU_INVENTORY_DIR'] ?? process.env['KUZU_DATA_DIR'];
 const inventoryRepo: InfrastructureRepository = createInventoryRepository();
 
 // ── Input schemas ─────────────────────────────────────────────────────────────
@@ -245,8 +244,8 @@ async function main(): Promise<void> {
   await server.connect(transport);
   logger.info('infrastructure-graph-agent started', {
     transport: 'stdio',
-    graphStore: (process.env['GRAPH_DIR'] ?? process.env['KUZU_GRAPH_DIR'] ?? process.env['KUZU_DATA_DIR']) ? 'file(shared)' : 'in-memory',
-    inventoryStore: inventoryDir ? 'file(shared)' : 'in-memory',
+    runsRoot: getRunsRoot(),
+    activeRun: getCurrentRun()?.runDir ?? 'none (start one via discovery start_migration_run)',
   });
 
   const shutdown = async (): Promise<void> => {

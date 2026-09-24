@@ -12,6 +12,7 @@ import { InMemoryAssessmentRepository } from '../../../repositories/migration/in
 import { MigrationAnalysisService } from '../../../domain/migration/service.js';
 import { evaluateRule } from '../../../domain/migration/rules.js';
 import { logger } from '../../../infrastructure/aws/logger.js';
+import { getCurrentRun, getRunsRoot } from '../../../infrastructure/run/run-context.js';
 
 /**
  * migration-analysis-agent MCP server.
@@ -196,8 +197,8 @@ async function main(): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  const repoKind = (process.env['GRAPH_DIR'] ?? process.env['KUZU_GRAPH_DIR'] ?? process.env['KUZU_DATA_DIR']) ? 'file(shared)' : 'in-memory';
-  logger.info('migration-analysis-agent started', { transport: 'stdio', graphRepository: repoKind });
+  const repoKind = getCurrentRun()?.runDir ?? `none (runs root: ${getRunsRoot()})`;
+  logger.info('migration-analysis-agent started', { transport: 'stdio', activeRun: repoKind });
 
   const shutdown = async (): Promise<void> => {
     logger.info('migration-analysis-agent shutting down');

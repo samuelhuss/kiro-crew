@@ -9,14 +9,16 @@
   ],
   "mcpServers": {
     "infrastructure-graph-mcp": {
-      "command": "/home/kirocrew/.local/nodejs/bin/node",
+      "command": "node",
       "args": [
-        "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/dist/mcp/graph-agent/src/index.js"
+        "{{PROJECT_ROOT}}/scripts/run-with-env.mjs",
+        "node",
+        "{{PROJECT_ROOT}}/dist/mcp/graph-agent/src/index.js"
       ],
       "env": {
         "LOG_LEVEL": "info",
-        "GRAPH_DIR": "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/data/graph",
-        "INVENTORY_DIR": "/home/kirocrew/workplace/kirocrew-workspace/aws-migration-mvp/data/inventory"
+        "MIGRATION_PROJECT_ROOT": "{{PROJECT_ROOT}}",
+        "MIGRATION_RUNS_DIR": "{{PROJECT_ROOT}}/runs"
       }
     }
   },
